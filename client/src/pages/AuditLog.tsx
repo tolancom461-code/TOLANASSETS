@@ -23,6 +23,10 @@ import {
 } from "lucide-react";
 
 const actionTypeLabels: Record<string, { label: string; color: string; bgColor: string; icon: string }> = {
+  CONVERT_OUT: {label:"تحويل إلى نوع آخر",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  CONVERT_IN: {label:"وارد بالتحويل",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
+  CONVERT_REQUEST: {label:"طلب تحويل",color:"text-amber-700",bgColor:"bg-amber-100",icon:"↔"},
+  CONVERT_CANCEL: {label:"إلغاء طلب تحويل",color:"text-gray-700",bgColor:"bg-gray-100",icon:"✕"},
   WARRANTY: {label:"استبدال بالضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
   WARRANTY_REQUEST: {label:"طلب ضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
   WARRANTY_EDIT: {label:"تعديل مسودة الضمان",color:"text-violet-700",bgColor:"bg-violet-100",icon:"↔"},
@@ -61,6 +65,7 @@ const tableNameLabels: Record<string, string> = {
 
 // ترجمة أسماء الحقول للعربية
 const fieldNameLabels: Record<string, string> = {
+  conversion: "بيانات التحويل", conversionId: "رقم طلب التحويل", sourceType: "نوع المصدر", sourceId: "السجل السابق", sourceCode: "الرمز السابق", targetType: "نوع الوجهة", targetId: "السجل الجديد", targetCode: "الرمز الجديد", executedByName: "نفذه", executedAt: "وقت التنفيذ",
   draftVersion: "نسخة المسودة",
   approvedBy: "معرف المعتمد",
   approvedByName: "اسم المعتمد",

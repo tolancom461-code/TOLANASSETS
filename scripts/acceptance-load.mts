@@ -25,8 +25,11 @@ export async function runAcceptance(db:mysql.Pool){
  const site=await caller.settings.locations.create({name:'موقع قبول مستقل',assetPrefix:'AC',custodyPrefix:'CU'});
  const branch=await caller.settings.branches.create({name:'فرع القبول',locationId:site.id});
  const dept=await caller.settings.departments.create({name:'قسم القبول',branchId:branch.id});
- await caller.settings.employees.create({fullName:'موظف القبول',departmentId:dept.id});
- const employee=(await caller.settings.employees.list())[0];
+ const employee=await caller.settings.employees.create({
+  fullName:'موظف القبول',
+  fingerprintId:'0001',
+  nationalId:'0000000001',
+ });
  const classification=await caller.depreciation.createClassification({code:'ACCEPTANCE',name:'أثاث اختبار القبول'});
  for(let i=2;i<=100;i++)await db.query("INSERT INTO users(id,openId,username,passwordHash,name,role,loginMethod) VALUES(?,?,?,?,?,'accountant','local')",[i,`accept-${i}`,`accept-${i}`,passwordHash,`مستخدم قبول ${i}`]);
  for(const kind of ['assets','custody_items']){

@@ -1,6 +1,8 @@
 import { escapeHtml } from "@shared/html";
 import { canApprove as hasApprovalRole, canOperate as hasOperatorRole } from "@shared/roles";
 import { remainingQuantity } from "@shared/inventoryQuantity";
+import { canSelectConversion } from "@shared/inventoryConversion";
+import InventoryConversion, { InventoryConversionLinks } from "@/components/InventoryConversion";
 /*
  * Design: Calm Luxury - إدارة الأصول
  * مربوطة بالـ API الحقيقي عبر tRPC
@@ -122,6 +124,7 @@ export default function Assets() {
   const { user } = useAuth();
   const canApprove = hasApprovalRole(user?.role);
   const canOperate = hasOperatorRole(user?.role);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterLocation, setFilterLocation] = useState("all");
@@ -137,9 +140,11 @@ export default function Assets() {
     locationId: filterLocation !== "all" ? Number(filterLocation) : undefined,
     status: filterStatus !== "all" ? filterStatus : undefined,
   }), [filterDept, filterLocation, filterStatus, debouncedSearch]);
+  useEffect(() => setSelectedIds([]), [tablePage, filterDept, filterLocation, filterStatus, debouncedSearch]);
 
   const { data: assetsData, isLoading } = trpc.inventory.assets.list.useQuery({...apiFilters, limit: 50, offset: (tablePage - 1) * 50});
   const {data: tableTotal = 0} = trpc.inventory.assets.count.useQuery(apiFilters);
+  useEffect(() => { if (assetsData) setSelectedIds(previous => previous.filter(id => assetsData.some(row => row.id === id && canSelectConversion(row)))); }, [assetsData]);
   useEffect(() => { if (tableTotal > 0 && tablePage > Math.ceil(tableTotal / 50)) setTablePage(Math.ceil(tableTotal / 50)); }, [tableTotal, tablePage]);
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
@@ -556,6 +561,7 @@ export default function Assets() {
                 <SelectItem value="REPLACED">مستبدل بالضمان</SelectItem><SelectItem value="EXCLUDED">مستبعد كلياً</SelectItem>
                 <SelectItem value="DRAFT">مسودة بانتظار الاعتماد</SelectItem>
                 <SelectItem value="CANCELLED">مسودة ملغاة</SelectItem>
+                <SelectItem value="CONVERTED">محوّل إلى العهد (تاريخي)</SelectItem>
               </SelectContent>
             </Select>
             <Select value={filterDept} onValueChange={setFilterDept}>
@@ -591,7 +597,9 @@ export default function Assets() {
         </div>
       }
     >
+      <InventoryConversion sourceType="asset" selectedIds={selectedIds} onClear={() => setSelectedIds([])} onComplete={async () => { setSelectedIds([]); setShowView(null); }} />
       <DataTable
+        selection={canOperate ? { ids: selectedIds, onChange: setSelectedIds, canSelect: canSelectConversion, label: a => `${a.assetCode || ""} ${a.assetName}` } : undefined}
         pageSize={50}
         serverPagination={{page: tablePage, total: tableTotal, onPageChange: setTablePage, search: tableSearch, onSearchChange: (value) => {setTableSearch(value); setTablePage(1);}}}
         data={assets}
@@ -632,6 +640,7 @@ export default function Assets() {
           </DialogHeader>
           {showView && (
             <div className="space-y-4">
+              <InventoryConversionLinks entityType="asset" entityId={showView.id} />
               <div className="bg-muted/30 rounded-xl p-4 border border-border/50">
                 <div className="grid grid-cols-2 gap-4">
                   <InfoField label="رمز الأصل" value={showView.assetCode || "-"} highlight />
@@ -798,7 +807,7 @@ export default function Assets() {
                   <Select value={form.assigned_to} onValueChange={(v) => setForm((f) => ({ ...f, assigned_to: v }))}>
                     <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="اختر الموظف المستلم" /></SelectTrigger>
                     <SelectContent>
-                      {formEmployees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.code ? `${e.code} — ` : ""}{e.fullName}</SelectItem>)}
+                      {formEmployees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.fullName}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>

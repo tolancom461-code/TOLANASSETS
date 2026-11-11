@@ -63,7 +63,7 @@ export const differenceWorkflowProcedures = {
             row =>
               row.id !== difference.entityId &&
               row.approvedAt &&
-              !["DRAFT", "CANCELLED"].includes(row.status)
+              !["DRAFT", "CANCELLED", "CONVERTED"].includes(row.status)
           )
           .map(row => ({
             id: row.id,
@@ -221,7 +221,7 @@ export const differenceWorkflowProcedures = {
               difference.difference <= 0 ||
               operation.id === difference.entityId ||
               !operation.approvedAt ||
-              ["DRAFT", "CANCELLED"].includes(operation.status) ||
+              ["DRAFT", "CANCELLED", "CONVERTED"].includes(operation.status) ||
               input.quantity > operation.quantity
             )
               throw new TRPCError({

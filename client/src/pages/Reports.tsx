@@ -16,6 +16,9 @@ import {
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ReportsExcelButton } from "@/components/ExcelButtons";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import InventorySummaryReport from "@/components/InventorySummaryReport";
+import { remainingQuantity } from "@shared/inventoryQuantity";
 
 function formatNumber(val: number): string {
   if (!val || isNaN(val)) return "0.00";
@@ -28,6 +31,7 @@ function formatCurrency(val: number): string {
 }
 
 export default function Reports() {
+  const [activeTab, setActiveTab] = useState("detail");
   const [codeFilter, setCodeFilter] = useState("");
   const [nameFilter, setNameFilter] = useState("");
   const [employeeFilter, setEmployeeFilter] = useState("الكل");
@@ -43,10 +47,10 @@ export default function Reports() {
 
   // جلب البيانات من API
   const reportType = typeFilter === "أصول فقط" ? "assets" as const : typeFilter === "عهَد فقط" ? "custody" as const : "all" as const;
-  const { data: rawData, isLoading } = trpc.records.reports.inventory.useQuery({ type: reportType });
-  const { data: deptsList } = trpc.settings.departments.list.useQuery();
-  const { data: locsList } = trpc.settings.locations.list.useQuery();
-  const { data: branchesList } = trpc.settings.branches.list.useQuery();
+  const { data: rawData, isLoading } = trpc.records.reports.inventory.useQuery({ type: reportType }, { enabled: activeTab === "detail" });
+  const { data: deptsList } = trpc.settings.departments.list.useQuery(undefined, { enabled: activeTab === "detail" });
+  const { data: locsList } = trpc.settings.locations.list.useQuery(undefined, { enabled: activeTab === "detail" });
+  const { data: branchesList } = trpc.settings.branches.list.useQuery(undefined, { enabled: activeTab === "detail" });
 
   // بناء البيانات الموحدة
   const allData = useMemo(() => {
@@ -55,9 +59,9 @@ export default function Reports() {
       report_type: r.type === "asset" ? "أصل" : "عهدة",
       code: r.code || "",
       name: r.name || "",
-      quantity: Math.max(0, (r.quantity || 0) - (r.warrantyReplacedQuantity || 0)),
+      quantity: Math.max(0, remainingQuantity(r)),
       asset_value: parseFloat(r.unitValue) || 0,
-      total_value: Math.max(0, (r.quantity || 0) - (r.warrantyReplacedQuantity || 0)) * (parseFloat(r.unitValue) || 0),
+      total_value: Math.max(0, remainingQuantity(r)) * (parseFloat(r.unitValue) || 0),
       owner_name: r.employeeName || "-",
       department: r.departmentName || "-",
       branch: r.branchName || "-",
@@ -208,6 +212,12 @@ export default function Reports() {
 
   return (
     <DashboardLayout title="التقارير" subtitle="تقرير شامل للعهد والأصول">
+      <Tabs value={activeTab} onValueChange={setActiveTab} dir="rtl" className="gap-4">
+        <TabsList className="w-full sm:w-fit">
+          <TabsTrigger value="detail">التقارير التفصيلية</TabsTrigger>
+          <TabsTrigger value="summary">تقارير الإجماليات</TabsTrigger>
+        </TabsList>
+        <TabsContent value="detail" forceMount className="data-[state=inactive]:hidden">
       <div className="space-y-4">
         {/* قسم الفلاتر */}
         <div className="bg-card rounded-xl border border-border p-4 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
@@ -441,6 +451,11 @@ export default function Reports() {
           </div>
         </div>
       </div>
+        </TabsContent>
+        <TabsContent value="summary" forceMount className="data-[state=inactive]:hidden">
+          <InventorySummaryReport active={activeTab === "summary"} />
+        </TabsContent>
+      </Tabs>
     </DashboardLayout>
   );
 }

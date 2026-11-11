@@ -14,6 +14,7 @@ import {
   unique,
   uniqueIndex,
   foreignKey,
+  index,
 } from "drizzle-orm/mysql-core";
 
 // =============================================
@@ -317,6 +318,36 @@ export const custodyItems = mysqlTable("custody_items", {
 
 export type CustodyItem = typeof custodyItems.$inferSelect;
 export type InsertCustodyItem = typeof custodyItems.$inferInsert;
+
+// Type conversions retain the old record and its history; only the destination is operational.
+export const inventoryConversions = mysqlTable("inventory_conversions", {
+  id: int("id").autoincrement().primaryKey(),
+  requestKey: varchar("requestKey", { length: 36 }).notNull().unique("conversion_request_key_unique"),
+  sourceType: varchar("sourceType", { length: 20 }).notNull(),
+  status: varchar("status", { length: 20 }).default("PENDING").notNull(),
+  version: int("version").default(0).notNull(),
+  payload: json("payload").notNull(),
+  previewHash: varchar("previewHash", { length: 64 }).notNull(),
+  createdBy: int("createdBy").notNull().references(() => users.id),
+  createdByName: varchar("createdByName", { length: 255 }),
+  executedBy: int("executedBy").references(() => users.id),
+  executedByName: varchar("executedByName", { length: 255 }),
+  executedAt: timestamp("executedAt"),
+  cancelledBy: int("cancelledBy").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("conversion_pending_idx").on(table.sourceType, table.status)]);
+export const inventoryConversionItems = mysqlTable("inventory_conversion_items", {
+  id: int("id").autoincrement().primaryKey(),
+  conversionId: int("conversionId").notNull(),
+  sourceType: varchar("sourceType", { length: 20 }).notNull(),
+  sourceId: int("sourceId").notNull(),
+  targetType: varchar("targetType", { length: 20 }).notNull(),
+  targetId: int("targetId"),
+  quantity: int("quantity").notNull(),
+  sourceSnapshot: json("sourceSnapshot").notNull(),
+  targetSnapshot: json("targetSnapshot").notNull(),
+}, table => [foreignKey({ name: "conversion_item_request_fk", columns: [table.conversionId], foreignColumns: [inventoryConversions.id] }), unique("conversion_request_source_unique").on(table.conversionId, table.sourceId),
+  index("conversion_source_idx").on(table.sourceType, table.sourceId), index("conversion_target_idx").on(table.targetType, table.targetId)]);
 
 export const warrantyReplacements = mysqlTable("warranty_replacements", {
   id: int("id").autoincrement().primaryKey(),

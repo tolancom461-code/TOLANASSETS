@@ -20,11 +20,23 @@ import { logAuditAction } from "../security";
 import { TRPCError } from "@trpc/server";
 import { archiveRouter } from "../archiveRouter";
 import { inventoryTimeline } from "../inventoryTimeline";
+import { inventorySummaryInput } from "../../shared/inventorySummary";
+import { getInventorySummary, getInventorySummaryOptions } from "../inventorySummary";
 
 // =============================================
 // الأرشيف
 // =============================================
 const reportsRouter = router({
+  summary: operatorProcedure.input(inventorySummaryInput).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return getInventorySummary(db, input);
+  }),
+  summaryOptions: operatorProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return getInventorySummaryOptions(db);
+  }),
   // تقرير شامل للأصول والعهد
   inventory: operatorProcedure
     .input(z.object({
@@ -43,7 +55,7 @@ const reportsRouter = router({
       const results: any[] = [];
 
       if (!input?.type || input.type === "all" || input.type === "assets") {
-        const assetConditions: any[] = [sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`];
+        const assetConditions: any[] = [sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`];
         if (input?.search) assetConditions.push(or(like(assets.assetName, `%${input.search}%`), like(assets.assetCode, `%${input.search}%`)));
         if (input?.employeeId) assetConditions.push(eq(assets.assignedTo, input.employeeId));
         if (input?.departmentId) assetConditions.push(eq(assets.departmentId, input.departmentId));
@@ -78,7 +90,7 @@ const reportsRouter = router({
       }
 
       if (!input?.type || input.type === "all" || input.type === "custody") {
-        const custodyConditions: any[] = [sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`];
+        const custodyConditions: any[] = [sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`];
         if (input?.search) custodyConditions.push(or(like(custodyItems.name, `%${input.search}%`), like(custodyItems.code, `%${input.search}%`)));
         if (input?.employeeId) custodyConditions.push(eq(custodyItems.assignedTo, input.employeeId));
         if (input?.departmentId) custodyConditions.push(eq(custodyItems.departmentId, input.departmentId));
@@ -122,17 +134,17 @@ const reportsRouter = router({
 
     const [assetStats] = await db.select({
       count: sql<number>`COUNT(*)`,
-      totalValue: sql<string>`COALESCE(SUM(CAST(${assets.assetValue} AS DECIMAL(12,2)) * GREATEST(${assets.quantity} - ${assets.warrantyReplacedQuantity}, 0)), 0)`,
+      totalValue: sql<string>`COALESCE(SUM(CAST(${assets.assetValue} AS DECIMAL(12,2)) * GREATEST(${assets.quantity} - COALESCE(${assets.excludedQuantity}, 0) - ${assets.warrantyReplacedQuantity}, 0)), 0)`,
       activeCount: sql<number>`SUM(CASE WHEN ${assets.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       excludedCount: sql<number>`SUM(CASE WHEN ${assets.status} = 'EXCLUDED' THEN 1 ELSE 0 END)`,
-    }).from(assets).where(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`);
+    }).from(assets).where(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`);
 
     const [custodyStats] = await db.select({
       count: sql<number>`COUNT(*)`,
-      totalValue: sql<string>`COALESCE(SUM(CAST(${custodyItems.assetValue} AS DECIMAL(12,2)) * GREATEST(${custodyItems.quantity} - ${custodyItems.warrantyReplacedQuantity}, 0)), 0)`,
+      totalValue: sql<string>`COALESCE(SUM(CAST(${custodyItems.assetValue} AS DECIMAL(12,2)) * GREATEST(${custodyItems.quantity} - COALESCE(${custodyItems.excludedQuantity}, 0) - ${custodyItems.warrantyReplacedQuantity}, 0)), 0)`,
       activeCount: sql<number>`SUM(CASE WHEN ${custodyItems.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       excludedCount: sql<number>`SUM(CASE WHEN ${custodyItems.status} = 'EXCLUDED' THEN 1 ELSE 0 END)`,
-    }).from(custodyItems).where(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`);
+    }).from(custodyItems).where(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`);
 
     const [employeeCount] = await db.select({ count: sql<number>`COUNT(*)` }).from(employees);
     const [departmentCount] = await db.select({ count: sql<number>`COUNT(*)` }).from(departments);

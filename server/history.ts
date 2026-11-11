@@ -1,6 +1,7 @@
 import { archiveDocuments, auditLog } from "../drizzle/schema";
 
 export const historyLabels: Record<string, string> = {
+  CONVERT_OUT: "تحويل إلى نوع آخر", CONVERT_IN: "وارد بالتحويل", CONVERT_REQUEST: "طلب تحويل", CONVERT_CANCEL: "إلغاء طلب تحويل",
   FINANCE_DRAFT: "مسودة ملف مالي", FINANCE_EDIT: "تعديل مسودة مالية", FINANCE_SUBMIT: "مراجعة ملف مالي", FINANCE_APPROVE: "اعتماد ملف أو حركة مالية", FINANCE_RETURN: "إعادة ملف مالي", DEPRECIATION_APPROVE: "اعتماد إهلاك", DEPRECIATION_CLOSE: "إقفال فترة إهلاك", DEPRECIATION_REVERSE: "عكس إهلاك", DEPRECIATION_SUBMIT: "تقديم دورة إهلاك", DEPRECIATION_RETURN: "إعادة دورة إهلاك",
   CREATE: "إضافة", UPDATE: "تعديل مسودة", APPROVE: "اعتماد", REVIEW: "طلب تصحيح",
   CANCEL: "إلغاء مسودة", TRANSFER: "نقل", EXCLUDE: "استبعاد", INVENTORY: "جرد", ATTACH: "إضافة مرفق", DOCUMENT: "إضافة وثيقة",

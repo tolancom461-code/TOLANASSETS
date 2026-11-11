@@ -141,6 +141,13 @@
       "when": 1791288843443,
       "tag": "0019_dark_stingray",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1794182400000,
+      "tag": "0022_inventory_conversions",
+      "breakpoints": true
     }
   ]
 }

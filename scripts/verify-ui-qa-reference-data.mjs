@@ -11,14 +11,14 @@ try {
     locations: 'SELECT id,name,code,assetPrefix,custodyPrefix FROM locations ORDER BY code',
     branches: 'SELECT id,name,code,locationId FROM branches ORDER BY code',
     departments: 'SELECT id,name,code,branchId,locationId FROM departments ORDER BY code',
-    employees: 'SELECT id,fullName,code,departmentId,fingerprintId FROM employees ORDER BY code',
+    employees: 'SELECT id,fullName,code,departmentId,sequenceNo,fingerprintId FROM employees ORDER BY id',
     classifications: 'SELECT id,code,name,active FROM financial_classifications ORDER BY code',
   };
   for (const [key, query] of Object.entries(queries)) { const [rows] = await connection.query(query); result.observed[key] = rows; }
   const check = (key, pass) => { result.checks.push({ key, pass }); };
   for (const key of Object.keys(queries)) {
     check(`${key}: count`, result.observed[key].length === planned[key].length);
-    check(`${key}: unique codes`, new Set(result.observed[key].map(row => row.code)).size === result.observed[key].length);
+    if (key !== 'employees') check(`${key}: unique codes`, new Set(result.observed[key].map(row => row.code)).size === result.observed[key].length);
   }
   const lookup = (collection, predicate) => { const rows = collection.filter(predicate); return rows.length === 1 ? rows[0] : null; };
   const locations = {}, branches = {}, departments = {};
@@ -36,7 +36,7 @@ try {
   }
   for (const expected of planned.employees) {
     const row = lookup(result.observed.employees, row => row.fullName === expected.name);
-    check(expected.key, !!row && row.departmentId === departments[expected.departmentKey]?.id && row.fingerprintId === expected.fingerprintId && row.code.startsWith(departments[expected.departmentKey].code + '-'));
+    check(expected.key, !!row && row.departmentId === null && row.code === null && row.sequenceNo === null && row.fingerprintId === expected.fingerprintId);
   }
   for (const expected of planned.classifications) {
     const row = lookup(result.observed.classifications, row => row.code === expected.code);

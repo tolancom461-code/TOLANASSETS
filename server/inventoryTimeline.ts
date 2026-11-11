@@ -102,7 +102,7 @@ export async function inventoryTimeline(db: any, kind: "asset" | "custody", id: 
     if (usedAudits.has(audit.id)) continue;
     events.push(makeEvent({ id: audit.recordId }, audit, audit.actionType, tableName, audit.createdAt, parseHistoryData(audit.newData), audit.performedBy, true));
   }
-  if (!direct.some((entry: any) => entry.actionType === "CREATE") && entity.createdAt) events.push({ id: `created:${kind}:${id}`, recordId: id, tableName,
+  if (!direct.some((entry: any) => ["CREATE", "CONVERT_IN"].includes(entry.actionType)) && entity.createdAt) events.push({ id: `created:${kind}:${id}`, recordId: id, tableName,
     actionType: "CREATE", createdAt: entity.createdAt, actionDescription: "تاريخ إنشاء السجل؛ بيانات الإنشاء الأصلية غير محفوظة في سجل التدقيق",
     oldData: null, newData: null, changedFields: null, performedByName: null, historicalSnapshot: false, evidence: "record" });
   return events.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||

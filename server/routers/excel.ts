@@ -1,3 +1,4 @@
+import { remainingQuantity } from "../../shared/inventoryQuantity";
 import { z } from "zod";
 import { operatorProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
@@ -11,7 +12,7 @@ import {
   auditLog,
   financialClassifications,
 } from "../../drizzle/schema";
-import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
+import { eq, ne, desc, and, gte, lte, sql } from "drizzle-orm";
 import { logAuditAction } from "../security";
 import { inventoryLifecycle } from "../inventoryLifecycle";
 import { readExcelRows } from "../excelInput";
@@ -100,7 +101,22 @@ const employeeHeaders = [
   { key: "fingerprintId", label: "رقم البصمة", aliases: ["الرقم الوظيفي", "رقم وظيفي"] },
   { key: "fullName", label: "اسم الموظف", aliases: ["الاسم الكامل", "الاسم"] },
   { key: "nationalId", label: "رقم الهوية", aliases: ["رقم الهوية الوطنية", "الهوية", "رقم الإقامة"] },
+  { key: "phone", label: "رقم الهاتف", aliases: ["الهاتف", "رقم الجوال", "الجوال"] },
 ];
+
+async function createEmployeeExcelBuffer(data: Record<string, string | null>[]) {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("الموظفين", { views: [{ rightToLeft: true }] });
+  sheet.columns = employeeHeaders.map(({ key, label }) => ({
+    key,
+    header: label,
+    width: Math.max(label.length * 2, 15),
+    style: { numFmt: "@" },
+  }));
+  sheet.addRows(data);
+  return Buffer.from(await workbook.xlsx.writeBuffer()).toString("base64");
+}
 
 const auditHeaders = [
   { key: "id", label: "#" },
@@ -142,7 +158,7 @@ export const excelRouter = router({
       .select({
         assetName: assets.assetName,
         assetCode: assets.assetCode,
-        quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity,
+        quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity, excludedQuantity: assets.excludedQuantity,
         assetValue: assets.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
         condition: assets.condition,
         employeeName: employees.fullName,
@@ -158,6 +174,7 @@ export const excelRouter = router({
       .leftJoin(departments, eq(assets.departmentId, departments.id))
       .leftJoin(branches, eq(departments.branchId, branches.id))
       .leftJoin(locations, eq(assets.locationId, locations.id))
+      .where(ne(assets.status, "CONVERTED"))
       .orderBy(assets.id);
 
     const statusMap: Record<string, string> = {
@@ -279,7 +296,7 @@ export const excelRouter = router({
       .select({
         name: custodyItems.name,
         code: custodyItems.code,
-        quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity,
+        quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity, excludedQuantity: custodyItems.excludedQuantity,
         assetValue: custodyItems.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
         condition: custodyItems.condition,
         employeeName: employees.fullName,
@@ -295,6 +312,7 @@ export const excelRouter = router({
       .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
       .leftJoin(branches, eq(departments.branchId, branches.id))
       .leftJoin(locations, eq(custodyItems.locationId, locations.id))
+      .where(ne(custodyItems.status, "CONVERTED"))
       .orderBy(custodyItems.id);
 
     const statusMap: Record<string, string> = {
@@ -411,21 +429,14 @@ export const excelRouter = router({
     const db = await getDb();
     if (!db) throw new Error("Database not available");
 
-    const allEmployees = await db.select({
+    const data = await db.select({
       fullName: employees.fullName,
-      departmentName: departments.name,
-      locationName: locations.name,
       fingerprintId: employees.fingerprintId,
       nationalId: employees.nationalId,
       phone: employees.phone,
-    }).from(employees)
-      .leftJoin(departments, eq(employees.departmentId, departments.id))
-      .leftJoin(locations, eq(departments.locationId, locations.id))
-      .orderBy(employees.id);
+    }).from(employees).orderBy(employees.id);
 
-    const data = allEmployees;
-
-    const base64 = createExcelBuffer(data as Record<string, unknown>[], employeeHeaders, "الموظفين");
+    const base64 = await createEmployeeExcelBuffer(data);
 
     await logAuditAction({
       tableName: "employees",
@@ -451,8 +462,6 @@ export const excelRouter = router({
       const rows = await parseExcelBuffer(input.base64Data, employeeHeaders);
       if (rows.length === 0) throw new Error("الملف فارغ أو لا يحتوي على بيانات صالحة");
 
-      // الاستيراد الأولي للموظفين لا يتطلب قسماً أو موقعاً.
-      // يتم ربط الموظف بالقسم يدوياً لاحقاً من شاشة الإعدادات.
       const existingEmployees = await db
         .select({
           id: employees.id,
@@ -476,31 +485,32 @@ export const excelRouter = router({
           const fullName = row.fullName?.trim();
           const fingerprintId = row.fingerprintId?.trim();
           const nationalId = row.nationalId?.trim() || null;
+          const phone = row.phone?.trim() || null;
 
           if (!fingerprintId) throw new Error("رقم البصمة / الرقم الوظيفي مطلوب");
+          if (phone && phone.length > 50) throw new Error("رقم الهاتف يجب ألا يتجاوز 50 حرفًا");
 
           const existingEmployee = employeesByFingerprint.get(fingerprintId);
           if (existingEmployee) {
             if (!nationalId) throw new Error("رقم الهوية مطلوب لتحديث الموظف الموجود");
 
-            // الموظف موجود مسبقاً: نحدّث رقم الهوية فقط، دون المساس
-            // بالاسم أو القسم أو الهاتف أو أي بيانات أخرى.
             await db
               .update(employees)
-              .set({ nationalId })
+              .set({ nationalId, ...(phone ? { phone } : {}) })
               .where(eq(employees.id, existingEmployee.id));
             updated++;
             continue;
           }
 
           if (!fullName) throw new Error("اسم الموظف مطلوب للموظف الجديد");
+          if (!nationalId) throw new Error("رقم الهوية مطلوب للموظف الجديد");
 
           await db.insert(employees).values({
             fullName,
             fingerprintId,
             departmentId: null,
             nationalId,
-            phone: null,
+            phone,
           });
           imported++;
         } catch (err: any) {
@@ -539,7 +549,7 @@ export const excelRouter = router({
           .select({
             assetName: assets.assetName,
             assetCode: assets.assetCode,
-            quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity,
+            quantity: assets.quantity, warrantyReplacedQuantity: assets.warrantyReplacedQuantity, excludedQuantity: assets.excludedQuantity,
             assetValue: assets.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
             employeeName: employees.fullName,
             departmentName: departments.name,
@@ -554,16 +564,16 @@ export const excelRouter = router({
           .leftJoin(departments, eq(assets.departmentId, departments.id))
           .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(assets.locationId, locations.id))
-          .where(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`);
+          .where(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`);
 
         for (const a of allAssets) {
           items.push({
             type: "أصل",
             code: a.assetCode || "",
             name: a.assetName,
-            quantity: String(Math.max(0, a.quantity - a.warrantyReplacedQuantity)),
+            quantity: String(Math.max(0, remainingQuantity(a))),
             unitValue: a.assetValue || "0",
-            totalValue: String(Number(a.assetValue || 0) * Math.max(0, a.quantity - a.warrantyReplacedQuantity)),
+            totalValue: String(Number(a.assetValue || 0) * Math.max(0, remainingQuantity(a))),
             employeeName: a.employeeName || "",
             departmentName: a.departmentName || "",
             branchName: a.branchName || "",
@@ -579,7 +589,7 @@ export const excelRouter = router({
           .select({
             name: custodyItems.name,
             code: custodyItems.code,
-            quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity,
+            quantity: custodyItems.quantity, warrantyReplacedQuantity: custodyItems.warrantyReplacedQuantity, excludedQuantity: custodyItems.excludedQuantity,
             assetValue: custodyItems.assetValue, classificationCode: financialClassifications.code, classificationName: financialClassifications.name,
             employeeName: employees.fullName,
             departmentName: departments.name,
@@ -594,16 +604,16 @@ export const excelRouter = router({
           .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
           .leftJoin(branches, eq(departments.branchId, branches.id))
           .leftJoin(locations, eq(custodyItems.locationId, locations.id))
-          .where(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`);
+          .where(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`);
 
         for (const c of allCustody) {
           items.push({
             type: "عهدة",
             code: c.code || "",
             name: c.name,
-            quantity: String(Math.max(0, c.quantity - c.warrantyReplacedQuantity)),
+            quantity: String(Math.max(0, remainingQuantity(c))),
             unitValue: c.assetValue || "0",
-            totalValue: String(Number(c.assetValue || 0) * Math.max(0, c.quantity - c.warrantyReplacedQuantity)),
+            totalValue: String(Number(c.assetValue || 0) * Math.max(0, remainingQuantity(c))),
             employeeName: c.employeeName || "",
             departmentName: c.departmentName || "",
             branchName: c.branchName || "",
@@ -675,11 +685,19 @@ export const excelRouter = router({
   downloadTemplate: operatorProcedure
     .input(z.object({ type: z.enum(["assets", "custody", "employees"]) }))
     .mutation(async ({ input }) => {
+      if (input.type === "employees") {
+        const base64 = await createEmployeeExcelBuffer([{
+          fingerprintId: "01001",
+          fullName: "مثال: أحمد محمد",
+          nationalId: "1098765432",
+          phone: "0500000000",
+        }]);
+        return { base64, filename: "قالب_الموظفين.xlsx" };
+      }
       const headersMap = {
         // الرمز غير موجود في قوالب الاستيراد لأنه يُولد آلياً حسب الموقع.
         assets: { headers: assetHeaders.filter(h => h.key !== "assetCode"), sheet: "الأصول", filename: "قالب_الأصول.xlsx" },
         custody: { headers: custodyHeaders.filter(h => h.key !== "code"), sheet: "العهد", filename: "قالب_العهد.xlsx" },
-        employees: { headers: employeeHeaders, sheet: "الموظفين", filename: "قالب_الموظفين.xlsx" },
       };
 
       const config = headersMap[input.type];
@@ -699,7 +717,7 @@ export const excelRouter = router({
           status: "نشط",
           notes: "",
         });
-      } else if (input.type === "custody") {
+      } else {
         sampleData.push({
           name: "مثال: طابعة",
           quantity: "1",
@@ -711,12 +729,6 @@ export const excelRouter = router({
           locationName: "اسم الموقع",
           status: "نشط",
           notes: "",
-        });
-      } else {
-        sampleData.push({
-          fingerprintId: "1001",
-          fullName: "مثال: أحمد محمد",
-          nationalId: "1098765432",
         });
       }
 

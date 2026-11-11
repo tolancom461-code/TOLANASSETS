@@ -7,7 +7,7 @@ const reference=JSON.parse(readFileSync(`${dir}/reference-data-verification.json
 const checks=[];
 const check=(key,pass)=>checks.push({key,pass});
 const rows=file=>{const w=XLSX.read(readFileSync(`${dir}/${file}`),{type:'buffer'});return XLSX.utils.sheet_to_json(w.Sheets[w.SheetNames[0]],{header:1,defval:''});};
-const columns={locations:['الكود','اسم الموقع','بادئة الأصول','بادئة العهد'],branches:['الكود','اسم الفرع','كود الموقع','اسم الموقع'],departments:['الكود','اسم القسم','كود الفرع','اسم الفرع','كود الموقع','اسم الموقع'],employees:['رقم البصمة','اسم الموظف','رقم الهوية']};
+const columns={locations:['الكود','اسم الموقع','بادئة الأصول','بادئة العهد'],branches:['الكود','اسم الفرع','كود الموقع','اسم الموقع'],departments:['الكود','اسم القسم','كود الفرع','اسم الفرع','كود الموقع','اسم الموقع'],employees:['رقم البصمة','اسم الموظف','رقم الهوية','رقم الهاتف']};
 for(const kind of Object.keys(columns)){
  const data=rows(`settings-${kind}-ui-export.xlsx`);
  check(`${kind}: export headers`,JSON.stringify(data[0])===JSON.stringify(columns[kind]));
@@ -21,7 +21,7 @@ for(const kind of Object.keys(columns)){
   if(r.length!==1)continue;
   const db=reference[kind].find(row=>(row.name||row.fullName)===expected.name);
   const loc=reference.locations.find(row=>row.id===(kind==='branches'?db.locationId:kind==='departments'?db.locationId:undefined));
-  if(kind==='employees')check(`${kind}: ${expected.key} identity`,r[0][0]===expected.fingerprintId&&r[0][2]===expected.nationalId);
+  if(kind==='employees')check(`${kind}: ${expected.key} identity and phone`,r[0][0]===expected.fingerprintId&&r[0][2]===expected.nationalId&&r[0][3]===(db?.phone??expected.phone??''));
   else check(`${kind}: ${expected.key} code`,r[0][0]===db.code);
   if(kind==='locations')check(`${kind}: ${expected.key} prefixes`,r[0][2]===expected.assetPrefix&&r[0][3]===expected.custodyPrefix);
   if(kind==='branches')check(`${kind}: ${expected.key} parent`,r[0][2]===loc.code&&r[0][3]===loc.name);

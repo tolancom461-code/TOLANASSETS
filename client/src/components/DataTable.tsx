@@ -25,6 +25,7 @@ interface DataTableProps<T> {
   emptyMessage?: string;
   pageSize?: number;
   serverPagination?: {page: number; total: number; onPageChange: (page: number) => void; search: string; onSearchChange: (search: string) => void};
+  selection?: { ids: number[]; onChange: (ids: number[]) => void; canSelect: (item: T) => boolean; label: (item: T) => string };
 }
 
 export default function DataTable<T extends Record<string, any>>({
@@ -38,6 +39,7 @@ export default function DataTable<T extends Record<string, any>>({
   emptyMessage = "لا توجد بيانات",
   pageSize = 10,
   serverPagination,
+  selection,
 }: DataTableProps<T>) {
   const [localSearch, setLocalSearch] = useState("");
   const [localPage, setLocalPage] = useState(1);
@@ -76,6 +78,8 @@ export default function DataTable<T extends Record<string, any>>({
   const total = serverPagination?.total ?? filtered.length;
   const totalPages = Math.ceil(total / pageSize);
   const paginated = serverPagination ? data : filtered.slice((page - 1) * pageSize, page * pageSize);
+  const selectableIds = selection ? paginated.filter(selection.canSelect).map(item => Number(item.id)) : [];
+  const selectedHere = selectableIds.filter(id => selection?.ids.includes(id));
 
   return (
     <div className="bg-card rounded-xl border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.03)]">
@@ -103,6 +107,10 @@ export default function DataTable<T extends Record<string, any>>({
         <table className="w-full min-w-[500px]">
           <thead>
             <tr className="border-b border-border bg-muted/30">
+              {selection && <th className="w-10 px-3 py-3 text-center"><input type="checkbox" className="w-3.5 h-3.5 accent-primary" aria-label="تحديد جميع الصفوف المتاحة في هذه الصفحة" disabled={!selectableIds.length}
+                checked={selectableIds.length > 0 && selectedHere.length === selectableIds.length}
+                ref={node => { if (node) node.indeterminate = selectedHere.length > 0 && selectedHere.length < selectableIds.length; }}
+                onChange={event => selection.onChange(event.target.checked ? [...new Set([...selection.ids, ...selectableIds])] : selection.ids.filter(id => !selectableIds.includes(id)))} /></th>}
               {columns.map((col) => (
                 <th
                   key={col.key}
@@ -125,7 +133,7 @@ export default function DataTable<T extends Record<string, any>>({
             {paginated.length === 0 ? (
               <tr>
                 <td
-                  colSpan={columns.length + (actions ? 1 : 0)}
+                  colSpan={columns.length + (actions ? 1 : 0) + (selection ? 1 : 0)}
                   className="text-center py-12 text-sm text-muted-foreground"
                 >
                   {emptyMessage}
@@ -142,6 +150,8 @@ export default function DataTable<T extends Record<string, any>>({
                     "hover:bg-muted/30"
                   )}
                 >
+                  {selection && <td className="px-3 py-3 text-center" onClick={event => event.stopPropagation()}><input type="checkbox" className="w-3.5 h-3.5 accent-primary" aria-label={`تحديد ${selection.label(item)}`} disabled={!selection.canSelect(item)} checked={selection.ids.includes(Number(item.id))}
+                    onChange={event => selection.onChange(event.target.checked ? [...new Set([...selection.ids, Number(item.id)])] : selection.ids.filter(id => id !== Number(item.id)))} /></td>}
                   {columns.map((col) => (
                     <td key={col.key} className={cn("px-4 py-3 text-sm", col.className)}>
                       {col.render ? col.render(item) : item[col.key]}

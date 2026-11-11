@@ -6,6 +6,7 @@ vi.mock('./security',()=>({logAuditAction:vi.fn(),clearBruteForceBlock:vi.fn()})
 vi.mock('./storage',()=>({storagePut:vi.fn(async()=>({url:'/api/files/test/backup.tln'}))}));
 beforeEach(()=>{isolated.db=legacyFixture();});
 import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
+import ExcelJS from "exceljs";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import type { User } from "../drizzle/schema";
@@ -146,6 +147,7 @@ describe("localAuth", () => {
 // اختبارات Excel
 // ==========================================
 describe("excel", () => {
+  const employeeExcelHeaders = ["رقم البصمة", "اسم الموظف", "رقم الهوية", "رقم الهاتف"];
   it("exportAssets returns base64 and filename", async () => {
     const ctx = createMockContext();
     const caller = appRouter.createCaller(ctx);
@@ -170,14 +172,22 @@ describe("excel", () => {
     expect(result.filename).toContain("العهد");
   });
 
-  it("exportEmployees returns base64 and filename", async () => {
+  it("exportEmployees exports employee details and keeps identifiers as text", async () => {
     const ctx = createMockContext();
     const caller = appRouter.createCaller(ctx);
+    Object.assign(isolated.db.rows().employees[0], {
+      fingerprintId: "0001",
+      nationalId: "0000000001",
+      phone: "0500000000",
+    });
 
     const result = await caller.excel.exportEmployees();
-    expect(result).toHaveProperty("base64");
-    expect(result).toHaveProperty("filename");
     expect(result.filename).toContain("الموظفين");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(result.base64, "base64"));
+    const sheet = workbook.worksheets[0];
+    expect([1, 2, 3, 4].map(column => sheet.getCell(1, column).value)).toEqual(employeeExcelHeaders);
+    expect([1, 3, 4].map(column => sheet.getCell(2, column).value)).toEqual(["0001", "0000000001", "0500000000"]);
   });
 
   it("exportAuditLog returns base64 and filename", async () => {
@@ -218,13 +228,17 @@ describe("excel", () => {
     expect(result.filename).toContain("قالب");
   });
 
-  it("downloadTemplate returns template for employees", async () => {
+  it("downloadTemplate sets employee identifiers and phone columns to text", async () => {
     const ctx = createMockContext();
     const caller = appRouter.createCaller(ctx);
 
     const result = await caller.excel.downloadTemplate({ type: "employees" });
-    expect(result).toHaveProperty("base64");
     expect(result.filename).toContain("قالب");
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(result.base64, "base64"));
+    const sheet = workbook.worksheets[0];
+    expect([1, 2, 3, 4].map(column => sheet.getCell(1, column).value)).toEqual(employeeExcelHeaders);
+    expect([1, 3, 4].map(column => sheet.getColumn(column).numFmt)).toEqual(["@", "@", "@"]);
   });
 
   it("importAssets rejects invalid data", async () => {

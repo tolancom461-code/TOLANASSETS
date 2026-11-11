@@ -145,7 +145,7 @@ export async function sourceRecord(
   const table = type === "asset" ? assets : custodyItems;
   const query = tx.select().from(table).where(eq(table.id, id));
   const [row] = await (lock ? query.for("update") : query);
-  if (!row || ["DRAFT", "CANCELLED"].includes(row.status))
+  if (!row || ["DRAFT", "CANCELLED", "CONVERTED"].includes(row.status))
     fail("السجل التشغيلي غير معتمد أو غير موجود");
   return {
     ...row,
@@ -179,20 +179,42 @@ export async function financialState(tx: any, lock = false) {
   const exclusions = await read(assetExclusions);
   const transfers = await read(assetTransfers);
   const warranties = await read(warrantyReplacements);
+  const { batches, movements } = approvedFinancialRecords(policies, classes, rows, movementRows, assetRows, custodyRows);
+  return { policies, classes, rows, movementRows, assetRows, custodyRows, exclusions, transfers, warranties, batches, movements };
+}
+
+// Reports use immutable approved finance records and record identities only.
+// Do not fetch operational attachments/history when they are not used by reports.
+export async function financialReportState(tx: any) {
+  const [policies, classes, rows, movementRows, assetRows, custodyRows] = await Promise.all([
+    tx.select().from(depreciationPolicies),
+    tx.select().from(financialClassifications),
+    tx.select().from(depreciationBatches),
+    tx.select().from(depreciationMovements),
+    tx.select({ id: assets.id, assetName: assets.assetName, assetCode: assets.assetCode }).from(assets),
+    tx.select({ id: custodyItems.id, name: custodyItems.name, code: custodyItems.code }).from(custodyItems),
+  ]);
+  return { policies, ...approvedFinancialRecords(policies, classes, rows, movementRows, assetRows, custodyRows) };
+}
+
+function approvedFinancialRecords(policies: any[], classes: any[], rows: any[], movementRows: any[], assetRows: any[], custodyRows: any[]) {
+  const policyById = new Map(policies.filter(p => p.status === "APPROVED").map(p => [p.id, p]));
+  const classById = new Map(classes.map(c => [c.id, c]));
+  const assetById = new Map(assetRows.map(r => [r.id, r]));
+  const custodyById = new Map(custodyRows.map(r => [r.id, r]));
+  const parsedPolicies = new Map<number, ReturnType<typeof policyPayload.parse>>();
   const batches: FinancialBatch[] = rows
     .filter((r: any) => r.status === "APPROVED")
     .map((row: any) => {
-      const policy = policies.find(
-        (p: any) => p.id === row.policyId && p.status === "APPROVED"
-      );
+      const policy = policyById.get(row.policyId);
       if (!policy) fail("دفعة مالية مرتبطة بتهيئة غير معتمدة");
-      const p = policyPayload.parse(jsonData(policy.payload));
-      const classification = classes.find(
-        (c: any) => c.id === row.classificationId
-      );
-      const source = (
-        row.entityType === "asset" ? assetRows : custodyRows
-      ).find((r: any) => r.id === row.entityId);
+      let p = parsedPolicies.get(row.policyId);
+      if (!p) {
+        p = policyPayload.parse(jsonData(policy.payload));
+        parsedPolicies.set(row.policyId, p);
+      }
+      const classification = classById.get(row.classificationId);
+      const source = (row.entityType === "asset" ? assetById : custodyById).get(row.entityId);
       const rule = p.rules.find(
         r => r.classificationId === row.classificationId
       );
@@ -216,19 +238,7 @@ export async function financialState(tx: any, lock = false) {
       ...m,
       payload: movementPayload.parse(jsonData(m.payload)),
     }));
-  return {
-    policies,
-    classes,
-    rows,
-    movementRows,
-    assetRows,
-    custodyRows,
-    exclusions,
-    transfers,
-    warranties,
-    batches,
-    movements,
-  };
+  return { batches, movements };
 }
 
 export function operationalSources(

@@ -391,7 +391,7 @@ export function previewPeriod(
     for (const source of kind === "asset"
       ? state.assetRows
       : state.custodyRows) {
-      if (["DRAFT", "CANCELLED"].includes(source.status)) continue;
+      if (["DRAFT", "CANCELLED", "CONVERTED"].includes(source.status)) continue;
       const mapped = state.batches.filter(
         b => b.entityType === kind && b.entityId === source.id
       );

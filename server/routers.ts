@@ -13,6 +13,7 @@ import { uploadRouter } from "./routers/upload";
 import { inventoryCountRouter } from "./routers/inventoryCount";
 import { warrantyRouter } from "./warrantyRouter";
 import { depreciationRouter } from "./depreciationRouter";
+import { inventoryConversionRouter } from "./inventoryConversion";
 import { revokeUserSessions } from "./db";
 
 export const appRouter = router({
@@ -51,6 +52,7 @@ export const appRouter = router({
   inventoryCount: inventoryCountRouter,
   warranty: warrantyRouter,
   depreciation: depreciationRouter,
+  conversions: inventoryConversionRouter,
 });
 
 export type AppRouter = typeof appRouter;

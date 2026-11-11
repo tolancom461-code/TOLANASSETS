@@ -60,12 +60,21 @@ export function generateClearanceReport(data: ClearanceReportData): string {
     return stmt;
   });
 
-  // بناء جداول الأقسام للصفحة 2
-  let departmentSectionsHTML = "";
+  // تجميع الأقسام تحت المستلم؛ لا نضع المجموعة كلها داخل كتلة تمنع فواصل الصفحات.
+  const recipientDepartments = new Map<string, string[]>();
   for (const dept of departments) {
-    const deptAssets = data.assets.find(a => a.department === dept)?.items || [];
-    const deptCustody = data.custody.find(c => c.department === dept)?.items || [];
-    const alternate = data.departmentAlternates[dept] || "غير محدد";
+    if (![...data.assets, ...data.custody].some(group => group.department === dept && group.items.length)) continue;
+    const recipient = data.departmentAlternates[dept]?.trim() || "غير محدد";
+    const group = recipientDepartments.get(recipient) || [];
+    group.push(dept);
+    recipientDepartments.set(recipient, group);
+  }
+
+  // الإبقاء على جداول الأصول والعهد القديمة داخل كل قسم.
+  let departmentSectionsHTML = "";
+  const appendDepartment = (dept: string) => {
+    const deptAssets = data.assets.filter(a => a.department === dept).flatMap(a => a.items);
+    const deptCustody = data.custody.filter(c => c.department === dept).flatMap(c => c.items);
 
     departmentSectionsHTML += `
       <div class="dept-section">
@@ -73,10 +82,6 @@ export function generateClearanceReport(data: ClearanceReportData): string {
           <div class="dept-title">
             <span class="dept-icon">◆</span>
             ${escapeHtml(dept)}
-          </div>
-          <div class="dept-alternate">
-            <span class="alt-label">المستلم البديل:</span>
-            <span class="alt-name">${escapeHtml(alternate)}</span>
           </div>
         </div>
         <div class="dept-body">`;
@@ -144,6 +149,10 @@ export function generateClearanceReport(data: ClearanceReportData): string {
     departmentSectionsHTML += `
         </div>
       </div>`;
+  };
+  for (const [recipient, groupedDepartments] of [...recipientDepartments.entries()].sort(([a], [b]) => a.localeCompare(b, "ar"))) {
+    departmentSectionsHTML += `<div class="recipient-heading"><span class="recipient-name">المستلم البديل: <strong>${escapeHtml(recipient)}</strong></span><span class="recipient-signature">التوقيع: ..................................</span></div>`;
+    groupedDepartments.forEach(appendDepartment);
   }
 
   // بناء بنود التوقيعات
@@ -499,6 +508,25 @@ export function generateClearanceReport(data: ClearanceReportData): string {
         }
 
         /* ===== أقسام الأصول والعهد ===== */
+        .recipient-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+            margin: 18px 0 10px;
+            padding: 9px 12px;
+            border-right: 4px solid var(--primary);
+            background: var(--primary-bg);
+            color: var(--primary);
+            font-size: 13px;
+            overflow-wrap: anywhere;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+
+        .recipient-name { min-width: 0; }
+        .recipient-signature { flex-shrink: 0; white-space: nowrap; }
+
         .dept-section {
             margin-bottom: 14px;
             border: 1.5px solid var(--border-color);
@@ -674,15 +702,44 @@ export function generateClearanceReport(data: ClearanceReportData): string {
             .page-break {
                 page-break-before: always;
             }
-            .dept-section {
-                page-break-inside: avoid;
+            .page-break .dept-section {
+                break-inside: auto;
+                page-break-inside: auto;
                 overflow: visible;
+            }
+            .page-break .dept-body,
+            .page-break .table-group,
+            .page-break .items-table,
+            .page-break .items-table tbody {
+                break-inside: auto;
+                page-break-inside: auto;
+            }
+            .page-break .items-table tr,
+            .page-break .items-table thead,
+            .page-break .dept-header,
+            .page-break .table-label {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            .page-break .items-table thead {
+                display: table-header-group;
+            }
+            .page-break .dept-body,
+            .page-break .table-group:first-child,
+            .page-break .items-table {
+                break-before: avoid;
+                page-break-before: avoid;
+            }
+            .page-break .dept-header,
+            .page-break .table-label {
+                break-after: avoid;
+                page-break-after: avoid;
             }
         }
 
         @page {
             size: A4;
-            margin: 8mm;
+            margin: 12mm 8mm 8mm;
         }
 
         .page-break {

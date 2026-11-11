@@ -23,8 +23,11 @@ export async function runUi(db:mysql.Pool){
  const site=await bootstrap.settings.locations.create({name:'موقع اختبار الإصلاح',assetPrefix:'RA',custodyPrefix:'RC'});
  const branch=await bootstrap.settings.branches.create({name:'فرع اختبار الإصلاح',locationId:site.id});
  const dept=await bootstrap.settings.departments.create({name:'قسم اختبار الإصلاح',branchId:branch.id});
- await bootstrap.settings.employees.create({fullName:'موظف اختبار الإصلاح',departmentId:dept.id});
- const employee=(await bootstrap.settings.employees.list())[0];
+ const employee=await bootstrap.settings.employees.create({
+  fullName:'موظف اختبار الإصلاح',
+  fingerprintId:'0004',
+  nationalId:'0000000004',
+ });
  const app=express();applySecurityMiddleware(app);registerApiBodyParsers(app);app.use(requestValidator);let finish!:()=>void;
  const done=new Promise<void>(resolve=>{finish=resolve});
  app.post('/__qa/stop',(_req,res)=>{res.json({stopped:true});finish();});

@@ -40,9 +40,13 @@ export function transactionDatabase(initial: Record<string, any[]>) {
       const count = (part[3].match(/\?/g) || []).length;
       if (!params.slice(offset, offset + count).includes(read(context, part[1], part[2]))) return false;
     }
+    for (const part of sql.matchAll(/`([^`]+)`\.`([^`]+)` <> \?/g)) {
+      const offset = (sql.slice(0, part.index).match(/\?/g) || []).length;
+      if (read(context, part[1], part[2]) === params[offset]) return false;
+    }
     const remainder = /`([^`]+)`\.`quantity` - COALESCE\(`[^`]+`\.`excludedQuantity`, 0\)(?: - `[^`]+`\.`warrantyReplacedQuantity`)? > 0/.exec(sql);
-    const operational = /`([^`]+)`\.`status` NOT IN \('DRAFT', 'CANCELLED'\)/.exec(sql);
-    if (operational && ["DRAFT", "CANCELLED"].includes(context[operational[1]]?.status)) return false;
+    const operational = /`([^`]+)`\.`status` NOT IN \(([^)]+)\)/.exec(sql);
+    if (operational && [...operational[2].matchAll(/'([^']+)'/g)].some(match => context[operational[1]]?.status === match[1])) return false;
     return !remainder || context[remainder[1]].quantity - (context[remainder[1]].excludedQuantity || 0) - (context[remainder[1]].warrantyReplacedQuantity || 0) > 0;
   };
   const project = (context: Record<string, any>, projection: any, base: string) => {
@@ -114,7 +118,7 @@ export function transactionDatabase(initial: Record<string, any[]>) {
           for (const [index, item] of value.entries()) rows[name].push(structuredClone({id: firstId + index, createdAt: new Date("2026-10-05T10:00:00Z"), ...item}));
           return [{insertId: firstId}];
         }
-        if (upsert && name === "app_settings") {
+        if (upsert && ["app_settings", "depreciation_control"].includes(name)) {
           const settings = (rows[name] || []).find(row => row.id === value.id);
           if (settings) return [{ insertId: settings.id }];
         }

@@ -252,6 +252,11 @@ const exclusionsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.transaction(async tx => {
+      await operationalFinanceLock(tx);
+      const sourceTable = input.entityType === "asset" ? assets : custodyItems;
+      const [source] = await tx.select().from(sourceTable).where(eq(sourceTable.id, input.entityId)).for("update");
+      if (!source || source.status === "CONVERTED")
+        throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن حفظ استبعاد لسجل محوّل أو غير موجود" });
       if (input.draftId) {
         const [draft] = await tx.select().from(exclusionDrafts).where(and(eq(exclusionDrafts.id, input.draftId), eq(exclusionDrafts.createdBy, ctx.user.id))).for("update");
         if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "المسودة غير موجودة أو سبق تنفيذها" });
@@ -421,7 +426,7 @@ const clearanceRouter = router({
         })
         .from(assets)
         .leftJoin(departments, eq(assets.departmentId, departments.id))
-        .where(and(eq(assets.assignedTo, record.employeeId), sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`));
+        .where(and(eq(assets.assignedTo, record.employeeId), sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`));
 
       const employeeCustody = await db
         .select({
@@ -433,7 +438,7 @@ const clearanceRouter = router({
         })
         .from(custodyItems)
         .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
-        .where(and(eq(custodyItems.assignedTo, record.employeeId), sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`));
+        .where(and(eq(custodyItems.assignedTo, record.employeeId), sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`));
 
       return { 
         record, 

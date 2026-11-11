@@ -282,7 +282,7 @@ function BranchesTab() {
   const { data: branches = [], isLoading } = trpc.settings.branches.list.useQuery();
   const { data: locations = [] } = trpc.settings.locations.list.useQuery();
   const createMut = trpc.settings.branches.create.useMutation({ onSuccess:async()=>{await utils.settings.branches.list.invalidate();toast.success("تم إضافة الفرع وتوليد كوده")}, onError:e=>toast.error(e.message) });
-  const updateMut = trpc.settings.branches.update.useMutation({ onSuccess:async()=>{await Promise.all([utils.settings.branches.list.invalidate(),utils.settings.departments.list.invalidate(),utils.settings.employees.list.invalidate()]);toast.success("تم تعديل الفرع وتحديث المسار الهرمي")}, onError:e=>toast.error(e.message) });
+  const updateMut = trpc.settings.branches.update.useMutation({ onSuccess:async()=>{await Promise.all([utils.settings.branches.list.invalidate(),utils.settings.departments.list.invalidate()]);toast.success("تم تعديل الفرع وتحديث المسار الهرمي")}, onError:e=>toast.error(e.message) });
   const deleteMut = trpc.settings.branches.delete.useMutation({ onSuccess:async()=>{await utils.settings.branches.list.invalidate();toast.success("تم حذف الفرع")}, onError:e=>toast.error(e.message) });
   const [showAdd,setShowAdd]=useState(false); const [editId,setEditId]=useState<number|null>(null); const [name,setName]=useState(""); const [locationId,setLocationId]=useState("");
   const [page,setPage]=useState(1); const totalPages=Math.max(1,Math.ceil(branches.length/SETTINGS_PAGE_SIZE)); const pagedBranches=branches.slice((page-1)*SETTINGS_PAGE_SIZE,page*SETTINGS_PAGE_SIZE);
@@ -292,7 +292,7 @@ function BranchesTab() {
   return <div className="space-y-4"><div className="flex justify-between"><div><h3 className="text-sm font-bold">الفروع</h3><p className="text-xs text-muted-foreground">مثال: 01-01</p></div><div className="flex items-center gap-2 flex-wrap"><HierarchyExcelButtons type="branches" /><Button size="sm" onClick={()=>{setEditId(null);setName("");setLocationId("");setShowAdd(true)}}><Plus className="w-3.5 h-3.5 ml-1"/>إضافة فرع</Button></div></div>
     <div className="border rounded-xl overflow-hidden"><table className="w-full"><thead><tr className="bg-muted/30"><th className="text-right px-4 py-3 text-xs">الكود</th><th className="text-right px-4 py-3 text-xs">الفرع</th><th className="text-right px-4 py-3 text-xs">الموقع</th><th className="px-4 py-3 text-xs">الإجراءات</th></tr></thead><tbody>{pagedBranches.map((b:any)=><tr key={b.id} className="border-t"><td className="px-4 py-3"><code className="font-bold text-primary">{b.code||"—"}</code></td><td className="px-4 py-3 text-sm">{b.name}</td><td className="px-4 py-3 text-sm"><code className="text-xs ml-2">{b.locationCode}</code>{b.locationName}</td><td className="px-4 py-3"><div className="flex justify-center gap-2"><button onClick={()=>{setEditId(b.id);setName(b.name);setLocationId(String(b.locationId));setShowAdd(true)}}><Edit className="w-4 h-4"/></button><button onClick={()=>deleteMut.mutate({id:b.id})}><Trash2 className="w-4 h-4 text-red-400"/></button></div></td></tr>)}</tbody></table></div>
     <PaginationControls page={page} totalItems={branches.length} onPageChange={setPage} />
-    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-sm" dir="rtl"><DialogHeader><DialogTitle>{editId?"تعديل الفرع":"إضافة فرع"}</DialogTitle></DialogHeader><div className="space-y-4"><FieldHelp text={"اسم الفرع التابع للموقع؛ يولد كوده الهرمي من الموقع الذي تختاره."}><input value={name} onChange={e=>setName(e.target.value)} placeholder="اسم الفرع" className="w-full h-10 px-3 rounded-lg border"/></FieldHelp><Select value={locationId} onValueChange={setLocationId}><FieldHelp text={"الموقع الذي يتبع له الفرع؛ تغييره يعيد بناء المسار الهرمي للأقسام والموظفين تحته."}><SelectTrigger><SelectValue placeholder="اختر الموقع"/></SelectTrigger></FieldHelp><SelectContent>{locations.map((l:any)=><SelectItem key={l.id} value={String(l.id)}>{l.code} — {l.name}</SelectItem>)}</SelectContent></Select><p className="text-[11px] text-muted-foreground">الكود يولد تلقائياً من كود الموقع. عند نقل الفرع إلى موقع آخر سيُعطى مسار هرمي جديد وتُحدّث أكواد الأقسام والموظفين تحته.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setShowAdd(false)}>إلغاء</Button><Button onClick={save}>حفظ</Button></div></div></DialogContent></Dialog>
+    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-sm" dir="rtl"><DialogHeader><DialogTitle>{editId?"تعديل الفرع":"إضافة فرع"}</DialogTitle></DialogHeader><div className="space-y-4"><FieldHelp text={"اسم الفرع التابع للموقع؛ يولد كوده الهرمي من الموقع الذي تختاره."}><input value={name} onChange={e=>setName(e.target.value)} placeholder="اسم الفرع" className="w-full h-10 px-3 rounded-lg border"/></FieldHelp><Select value={locationId} onValueChange={setLocationId}><FieldHelp text={"الموقع الذي يتبع له الفرع؛ تغييره يعيد بناء المسار الهرمي للأقسام التابعة له."}><SelectTrigger><SelectValue placeholder="اختر الموقع"/></SelectTrigger></FieldHelp><SelectContent>{locations.map((l:any)=><SelectItem key={l.id} value={String(l.id)}>{l.code} — {l.name}</SelectItem>)}</SelectContent></Select><p className="text-[11px] text-muted-foreground">الكود يولد تلقائياً من كود الموقع. عند نقل الفرع إلى موقع آخر سيُعطى مسار هرمي جديد وتُحدّث أكواد الأقسام التابعة له.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setShowAdd(false)}>إلغاء</Button><Button onClick={save}>حفظ</Button></div></div></DialogContent></Dialog>
   </div>;
 }
 
@@ -300,7 +300,7 @@ function BranchesTab() {
 function DepartmentsTab() {
   const utils=trpc.useUtils(); const {data:depts=[],isLoading}=trpc.settings.departments.list.useQuery(); const {data:branches=[]}=trpc.settings.branches.list.useQuery();
   const createMut=trpc.settings.departments.create.useMutation({onSuccess:async()=>{await utils.settings.departments.list.invalidate();toast.success("تم إضافة القسم وتوليد كوده")},onError:e=>toast.error(e.message)});
-  const updateMut=trpc.settings.departments.update.useMutation({onSuccess:async()=>{await Promise.all([utils.settings.departments.list.invalidate(),utils.settings.employees.list.invalidate()]);toast.success("تم تعديل القسم وتحديث المسار الهرمي")},onError:e=>toast.error(e.message)});
+  const updateMut=trpc.settings.departments.update.useMutation({onSuccess:async()=>{await utils.settings.departments.list.invalidate();toast.success("تم تعديل القسم وتحديث المسار الهرمي")},onError:e=>toast.error(e.message)});
   const deleteMut=trpc.settings.departments.delete.useMutation({onSuccess:()=>utils.settings.departments.list.invalidate(),onError:e=>toast.error(e.message)});
   const [showAdd,setShowAdd]=useState(false),[editId,setEditId]=useState<number|null>(null),[name,setName]=useState(""),[branchId,setBranchId]=useState("");
   const [page,setPage]=useState(1); const totalPages=Math.max(1,Math.ceil(depts.length/SETTINGS_PAGE_SIZE)); const pagedDepts=depts.slice((page-1)*SETTINGS_PAGE_SIZE,page*SETTINGS_PAGE_SIZE);
@@ -310,7 +310,7 @@ function DepartmentsTab() {
   return <div className="space-y-4"><div className="flex justify-between"><div><h3 className="text-sm font-bold">الأقسام</h3><p className="text-xs text-muted-foreground">مثال: 01-01-001</p></div><div className="flex items-center gap-2 flex-wrap"><HierarchyExcelButtons type="departments" /><Button size="sm" onClick={()=>{setEditId(null);setName("");setBranchId("");setShowAdd(true)}}><Plus className="w-3.5 h-3.5 ml-1"/>إضافة قسم</Button></div></div>
     <div className="border rounded-xl overflow-hidden"><table className="w-full"><thead><tr className="bg-muted/30"><th className="text-right px-4 py-3 text-xs">الكود</th><th className="text-right px-4 py-3 text-xs">القسم</th><th className="text-right px-4 py-3 text-xs">الفرع</th><th className="text-right px-4 py-3 text-xs">الموقع</th><th className="px-4 py-3 text-xs">الإجراءات</th></tr></thead><tbody>{pagedDepts.map((d:any)=><tr key={d.id} className="border-t"><td className="px-4 py-3"><code className="font-bold text-primary">{d.code||"—"}</code></td><td className="px-4 py-3 text-sm">{d.name}</td><td className="px-4 py-3 text-sm">{d.branchName||"-"}</td><td className="px-4 py-3 text-sm">{d.locationName||"-"}</td><td><div className="flex justify-center gap-2"><button onClick={()=>{setEditId(d.id);setName(d.name);setBranchId(String(d.branchId||""));setShowAdd(true)}}><Edit className="w-4 h-4"/></button><button onClick={()=>deleteMut.mutate({id:d.id})}><Trash2 className="w-4 h-4 text-red-400"/></button></div></td></tr>)}</tbody></table></div>
     <PaginationControls page={page} totalItems={depts.length} onPageChange={setPage} />
-    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-sm" dir="rtl"><DialogHeader><DialogTitle>{editId?"تعديل القسم":"إضافة قسم"}</DialogTitle></DialogHeader><div className="space-y-4"><FieldHelp text={"اسم القسم التنظيمي؛ يستخدم لتخصيص الأصول والعهد وربط الموظفين به."}><input value={name} onChange={e=>setName(e.target.value)} placeholder="اسم القسم" className="w-full h-10 px-3 rounded-lg border"/></FieldHelp><Select value={branchId} onValueChange={setBranchId}><FieldHelp text={"الفرع الذي يتبع له القسم؛ تغييره يحدث أكواد القسم والموظفين التابعين له."}><SelectTrigger><SelectValue placeholder="اختر الفرع"/></SelectTrigger></FieldHelp><SelectContent>{branches.map((b:any)=><SelectItem key={b.id} value={String(b.id)}>{b.code} — {b.locationName} / {b.name}</SelectItem>)}</SelectContent></Select><p className="text-[11px] text-muted-foreground">الكود يولد آلياً. نقل القسم إلى فرع آخر يحدّث كوده وأكواد الموظفين التابعين له.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setShowAdd(false)}>إلغاء</Button><Button onClick={save}>حفظ</Button></div></div></DialogContent></Dialog>
+    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-sm" dir="rtl"><DialogHeader><DialogTitle>{editId?"تعديل القسم":"إضافة قسم"}</DialogTitle></DialogHeader><div className="space-y-4"><FieldHelp text={"اسم القسم التنظيمي؛ يستخدم لتخصيص الأصول والعهد."}><input value={name} onChange={e=>setName(e.target.value)} placeholder="اسم القسم" className="w-full h-10 px-3 rounded-lg border"/></FieldHelp><Select value={branchId} onValueChange={setBranchId}><FieldHelp text={"الفرع الذي يتبع له القسم؛ تغييره يحدّث كود القسم."}><SelectTrigger><SelectValue placeholder="اختر الفرع"/></SelectTrigger></FieldHelp><SelectContent>{branches.map((b:any)=><SelectItem key={b.id} value={String(b.id)}>{b.code} — {b.locationName} / {b.name}</SelectItem>)}</SelectContent></Select><p className="text-[11px] text-muted-foreground">الكود يولد آلياً. نقل القسم إلى فرع آخر يحدّث كوده.</p><div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setShowAdd(false)}>إلغاء</Button><Button onClick={save}>حفظ</Button></div></div></DialogContent></Dialog>
   </div>;
 }
 
@@ -318,25 +318,190 @@ function DepartmentsTab() {
 function EmployeesTab() {
   const utils = trpc.useUtils();
   const { data: employees = [], isLoading } = trpc.settings.employees.list.useQuery();
-  const { data: departments = [] } = trpc.settings.departments.list.useQuery();
-  const createMut = trpc.settings.employees.create.useMutation({ onSuccess: async () => { await utils.settings.employees.list.invalidate(); toast.success("تم إضافة الموظف وتوليد كوده الهرمي"); }, onError: (e) => toast.error(e.message) });
+  const createMut = trpc.settings.employees.create.useMutation({ onSuccess: async () => { await utils.settings.employees.list.invalidate(); toast.success("تم إضافة الموظف"); }, onError: (e) => toast.error(e.message) });
   const updateMut = trpc.settings.employees.update.useMutation({ onSuccess: async () => { await utils.settings.employees.list.invalidate(); toast.success("تم تعديل بيانات الموظف"); }, onError: (e) => toast.error(e.message) });
   const deleteMut = trpc.settings.employees.delete.useMutation({ onSuccess: async () => { await utils.settings.employees.list.invalidate(); toast.success("تم حذف الموظف"); }, onError: (e) => toast.error(e.message) });
-  const empty = { fullName: "", departmentId: "", fingerprintId: "", nationalId: "", phone: "" };
-  const [showAdd, setShowAdd] = useState(false); const [editId, setEditId] = useState<number | null>(null); const [newData, setNewData] = useState(empty); const [editData, setEditData] = useState(empty); const [searchQuery, setSearchQuery] = useState(""); const [page,setPage]=useState(1);
-  const filtered = employees.filter((e:any) => !searchQuery.trim() || `${e.code || ""} ${e.fullName} ${e.departmentName || ""} ${e.branchName || ""} ${e.locationName || ""} ${e.fingerprintId || ""}`.toLowerCase().includes(searchQuery.toLowerCase()));
-  const totalPages=Math.max(1,Math.ceil(filtered.length/SETTINGS_PAGE_SIZE)); const pagedEmployees=filtered.slice((page-1)*SETTINGS_PAGE_SIZE,page*SETTINGS_PAGE_SIZE);
-  useEffect(()=>setPage(current=>Math.min(current,totalPages)),[totalPages]);
-  const payload = (d: typeof empty) => ({ fullName: d.fullName.trim(), departmentId: Number(d.departmentId), fingerprintId: d.fingerprintId.trim() || null, nationalId: d.nationalId.trim() || null, phone: d.phone.trim() || null });
-  const handleAdd = () => { if (!newData.fullName.trim() || !newData.departmentId) return toast.error("يرجى إدخال اسم الموظف واختيار القسم"); createMut.mutate(payload(newData), { onSuccess: () => { setNewData(empty); setShowAdd(false); } }); };
-  const handleEdit = (id: number) => { if (!editData.fullName.trim() || !editData.departmentId) return toast.error("يرجى إدخال اسم الموظف واختيار القسم"); updateMut.mutate({ id, ...payload(editData) }, { onSuccess: () => setEditId(null) }); };
+  const empty = { fullName: "", fingerprintId: "", nationalId: "", phone: "" };
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [newData, setNewData] = useState(empty);
+  const [editData, setEditData] = useState(empty);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = employees.filter(employee =>
+    employee.fullName.toLowerCase().includes(query) ||
+    (employee.fingerprintId ?? "").toLowerCase().includes(query)
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / SETTINGS_PAGE_SIZE));
+  const pagedEmployees = filtered.slice((page - 1) * SETTINGS_PAGE_SIZE, page * SETTINGS_PAGE_SIZE);
+  useEffect(() => setPage(current => Math.min(current, totalPages)), [totalPages]);
+
+  const payload = (data: typeof empty) => ({
+    fullName: data.fullName.trim(),
+    fingerprintId: data.fingerprintId.trim() || null,
+    nationalId: data.nationalId.trim() || null,
+    phone: data.phone.trim() || null,
+  });
+  const handleAdd = () => {
+    const { fingerprintId, nationalId, ...data } = payload(newData);
+    if (!data.fullName) return toast.error("يرجى إدخال اسم الموظف");
+    if (!fingerprintId) return toast.error("رقم البصمة مطلوب");
+    if (!nationalId) return toast.error("رقم الهوية مطلوب");
+    createMut.mutate({ ...data, fingerprintId, nationalId }, {
+      onSuccess: () => { setNewData(empty); setShowAdd(false); },
+    });
+  };
+  const handleEdit = (id: number) => {
+    const data = payload(editData);
+    if (!data.fullName) return toast.error("يرجى إدخال اسم الموظف");
+    updateMut.mutate({ id, ...data }, { onSuccess: () => setEditId(null) });
+  };
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+
   return <div className="space-y-4">
-    <div className="flex items-center justify-between gap-3 flex-wrap"><div><h3 className="text-sm font-bold">الموظفين</h3><p className="text-xs text-muted-foreground">كود الموظف يعكس مساره الحالي، مثال 01-01-001-0001. الـ ID الداخلي يبقى ثابتاً.</p></div><div className="flex items-center gap-2"><EmployeesExcelButtons /><Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-3.5 h-3.5 ml-1" />إضافة موظف</Button></div></div>
-    <FieldHelp text={"ابحث عن الموظف بالاسم أو الكود أو القسم أو رقم البصمة لتضييق القائمة."}><input value={searchQuery} onChange={e=>{setSearchQuery(e.target.value);setPage(1)}} placeholder="بحث بالاسم أو الكود أو القسم أو رقم البصمة..." className="w-full h-10 px-3 border rounded-lg" /></FieldHelp>
-    <div className="border rounded-xl overflow-x-auto"><table className="w-full min-w-[1100px]"><thead><tr className="bg-muted/30"><th className="text-right px-3 py-3 text-xs">الكود</th><th className="text-right px-3 py-3 text-xs">الموظف</th><th className="text-right px-3 py-3 text-xs">القسم</th><th className="text-right px-3 py-3 text-xs">المسار</th><th className="px-3 py-3 text-xs">البصمة</th><th className="px-3 py-3 text-xs">الهوية</th><th className="px-3 py-3 text-xs">الهاتف</th><th className="px-3 py-3 text-xs">الإجراءات</th></tr></thead><tbody>{pagedEmployees.map((emp:any)=><tr key={emp.id} className="border-t"><td className="px-3 py-3"><code className="text-xs font-bold text-primary">{emp.code || "بانتظار ربط القسم"}</code></td><td className="px-3 py-3">{editId===emp.id?<FieldHelp text={"الاسم الكامل للموظف الذي سيرتبط بتسليم العهد والأصول وحركاتها."}><input value={editData.fullName} onChange={e=>setEditData({...editData,fullName:e.target.value})} className="h-9 px-2 border rounded-lg"/></FieldHelp>:<span className="font-medium">{emp.fullName}</span>}</td><td className="px-3 py-3">{editId===emp.id?<Select value={editData.departmentId} onValueChange={v=>setEditData({...editData,departmentId:v})}><FieldHelp text={"القسم الذي يتبع له الموظف؛ يولد منه كود الموظف ومساره التنظيمي."}><SelectTrigger className="min-w-[220px]"><SelectValue/></SelectTrigger></FieldHelp><SelectContent>{departments.map((d:any)=><SelectItem key={d.id} value={String(d.id)}>{d.code} — {d.name}</SelectItem>)}</SelectContent></Select>:emp.departmentName||"غير محدد"}</td><td className="px-3 py-3 text-xs text-muted-foreground">{emp.locationName && emp.branchName ? `${emp.locationName} / ${emp.branchName}` : "—"}</td><td className="px-3 py-3 text-center">{editId===emp.id?<FieldHelp text={"رقم الموظف في جهاز أو نظام البصمة، للربط والمراجعة عند الحاجة."}><input value={editData.fingerprintId} onChange={e=>setEditData({...editData,fingerprintId:e.target.value})} className="h-9 px-2 border rounded-lg"/></FieldHelp>:emp.fingerprintId||"-"}</td><td className="px-3 py-3 text-center">{editId===emp.id?<FieldHelp text={"رقم هوية الموظف لتمييز بياناته ومنع الالتباس بين الأسماء المتشابهة."}><input value={editData.nationalId} onChange={e=>setEditData({...editData,nationalId:e.target.value})} className="h-9 px-2 border rounded-lg"/></FieldHelp>:emp.nationalId||"-"}</td><td className="px-3 py-3 text-center">{editId===emp.id?<FieldHelp text={"رقم التواصل مع الموظف عند متابعة العهد والأصول المسندة إليه."}><input value={editData.phone} onChange={e=>setEditData({...editData,phone:e.target.value})} className="h-9 px-2 border rounded-lg"/></FieldHelp>:emp.phone||"-"}</td><td className="px-3 py-3"><div className="flex justify-center gap-2">{editId===emp.id?<><button onClick={()=>handleEdit(emp.id)}><Save className="w-4 h-4 text-primary"/></button><button onClick={()=>setEditId(null)}><X className="w-4 h-4"/></button></>:<><button onClick={()=>{setEditId(emp.id);setEditData({fullName:emp.fullName,departmentId:emp.departmentId?String(emp.departmentId):"",fingerprintId:emp.fingerprintId||"",nationalId:emp.nationalId||"",phone:emp.phone||""})}}><Edit className="w-4 h-4"/></button><button onClick={()=>deleteMut.mutate({id:emp.id})}><Trash2 className="w-4 h-4 text-red-400"/></button></>}</div></td></tr>)}</tbody></table></div>
+    <div className="flex items-center justify-between gap-3 flex-wrap">
+      <h3 className="text-sm font-bold">الموظفين</h3>
+      <div className="flex items-center gap-2">
+        <EmployeesExcelButtons />
+        <Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-3.5 h-3.5 ml-1" />إضافة موظف</Button>
+      </div>
+    </div>
+    <FieldHelp text="ابحث عن الموظف بالاسم أو رقم البصمة.">
+      <input
+        value={searchQuery}
+        onChange={event => { setSearchQuery(event.target.value); setPage(1); }}
+        placeholder="بحث بالاسم أو رقم البصمة..."
+        className="w-full h-10 px-3 border rounded-lg"
+      />
+    </FieldHelp>
+    <div className="border rounded-xl overflow-x-auto">
+      <table className="w-full min-w-[650px]">
+        <thead>
+          <tr className="bg-muted/30">
+            <th className="text-right px-3 py-3 text-xs">اسم الموظف</th>
+            <th className="px-3 py-3 text-xs">رقم البصمة</th>
+            <th className="px-3 py-3 text-xs">رقم الهوية</th>
+            <th className="px-3 py-3 text-xs">رقم الهاتف</th>
+            <th className="px-3 py-3 text-xs">الإجراءات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {pagedEmployees.map(employee => {
+            const isEditing = editId === employee.id;
+            return (
+              <tr key={employee.id} className="border-t">
+                <td className="px-3 py-3">
+                  {isEditing ? (
+                    <FieldHelp text="الاسم الكامل للموظف الذي سيرتبط بتسليم العهد والأصول وحركاتها.">
+                      <input
+                        aria-label="اسم الموظف"
+                        value={editData.fullName}
+                        onChange={event => setEditData({ ...editData, fullName: event.target.value })}
+                        maxLength={255}
+                        className="w-full h-9 px-2 border rounded-lg"
+                      />
+                    </FieldHelp>
+                  ) : <span className="font-medium">{employee.fullName}</span>}
+                </td>
+                <td className="px-3 py-3 text-center">
+                  {isEditing ? (
+                    <FieldHelp text="رقم الموظف في جهاز أو نظام البصمة، للربط والمراجعة عند الحاجة.">
+                      <input
+                        aria-label="رقم البصمة"
+                        value={editData.fingerprintId}
+                        onChange={event => setEditData({ ...editData, fingerprintId: event.target.value })}
+                        maxLength={100}
+                        className="w-full h-9 px-2 border rounded-lg"
+                      />
+                    </FieldHelp>
+                  ) : employee.fingerprintId || "—"}
+                </td>
+                <td className="px-3 py-3 text-center">
+                  {isEditing ? (
+                    <FieldHelp text="رقم هوية الموظف لتمييز بياناته ومنع الالتباس بين الأسماء المتشابهة.">
+                      <input
+                        aria-label="رقم الهوية"
+                        value={editData.nationalId}
+                        onChange={event => setEditData({ ...editData, nationalId: event.target.value })}
+                        maxLength={100}
+                        className="w-full h-9 px-2 border rounded-lg"
+                      />
+                    </FieldHelp>
+                  ) : employee.nationalId || "—"}
+                </td>
+                <td className="px-3 py-3 text-center">
+                  {isEditing ? (
+                    <FieldHelp text="رقم التواصل مع الموظف عند متابعة العهد والأصول المسندة إليه.">
+                      <input
+                        aria-label="رقم الهاتف"
+                        value={editData.phone}
+                        onChange={event => setEditData({ ...editData, phone: event.target.value })}
+                        maxLength={50}
+                        className="w-full h-9 px-2 border rounded-lg"
+                      />
+                    </FieldHelp>
+                  ) : employee.phone || "—"}
+                </td>
+                <td className="px-3 py-3">
+                  <div className="flex justify-center gap-2">
+                    {isEditing ? (
+                      <>
+                        <button type="button" aria-label="حفظ بيانات الموظف" disabled={updateMut.isPending} onClick={() => handleEdit(employee.id)}><Save className="w-4 h-4" /></button>
+                        <button type="button" aria-label="إلغاء التعديل" onClick={() => setEditId(null)}><X className="w-4 h-4" /></button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" aria-label="تعديل الموظف" onClick={() => {
+                          setEditId(employee.id);
+                          setEditData({
+                            fullName: employee.fullName,
+                            fingerprintId: employee.fingerprintId ?? "",
+                            nationalId: employee.nationalId ?? "",
+                            phone: employee.phone ?? "",
+                          });
+                        }}><Edit className="w-4 h-4" /></button>
+                        <button type="button" aria-label="حذف الموظف" onClick={() => deleteMut.mutate({ id: employee.id })}><Trash2 className="w-4 h-4 text-red-400" /></button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
     <PaginationControls page={page} totalItems={filtered.length} onPageChange={setPage} />
-    <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent className="max-w-md" dir="rtl"><DialogHeader><DialogTitle>إضافة موظف جديد</DialogTitle></DialogHeader><div className="space-y-3"><FieldHelp text={"الاسم الكامل للموظف الذي سيرتبط بتسليم العهد والأصول وحركاتها."}><input value={newData.fullName} onChange={e=>setNewData({...newData,fullName:e.target.value})} placeholder="اسم الموظف" className="w-full h-10 px-3 border rounded-lg"/></FieldHelp><Select value={newData.departmentId} onValueChange={v=>setNewData({...newData,departmentId:v})}><FieldHelp text={"القسم الذي يتبع له الموظف؛ يولد منه كود الموظف ومساره التنظيمي."}><SelectTrigger><SelectValue placeholder="اختر القسم"/></SelectTrigger></FieldHelp><SelectContent>{departments.map((d:any)=><SelectItem key={d.id} value={String(d.id)}>{d.code} — {d.name}</SelectItem>)}</SelectContent></Select><div className="text-[11px] text-muted-foreground">سيولد كود الموظف تلقائياً من كود القسم المختار.</div><FieldHelp text={"رقم الموظف في جهاز أو نظام البصمة، للربط والمراجعة عند الحاجة."}><input value={newData.fingerprintId} onChange={e=>setNewData({...newData,fingerprintId:e.target.value})} placeholder="رقم البصمة" className="w-full h-10 px-3 border rounded-lg"/></FieldHelp><FieldHelp text={"رقم هوية الموظف لتمييز بياناته ومنع الالتباس بين الأسماء المتشابهة."}><input value={newData.nationalId} onChange={e=>setNewData({...newData,nationalId:e.target.value})} placeholder="رقم الهوية" className="w-full h-10 px-3 border rounded-lg"/></FieldHelp><FieldHelp text={"رقم التواصل مع الموظف عند متابعة العهد والأصول المسندة إليه."}><input value={newData.phone} onChange={e=>setNewData({...newData,phone:e.target.value})} placeholder="رقم الهاتف" className="w-full h-10 px-3 border rounded-lg"/></FieldHelp><div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setShowAdd(false)}>إلغاء</Button><Button onClick={handleAdd}>حفظ الموظف</Button></div></div></DialogContent></Dialog>
+    <Dialog open={showAdd} onOpenChange={setShowAdd}>
+      <DialogContent className="max-w-md" dir="rtl">
+        <DialogHeader><DialogTitle>إضافة موظف جديد</DialogTitle></DialogHeader>
+        <form className="space-y-3" noValidate onSubmit={event => { event.preventDefault(); handleAdd(); }}>
+          <FieldHelp text="الاسم الكامل للموظف الذي سيرتبط بتسليم العهد والأصول وحركاتها.">
+            <input value={newData.fullName} onChange={e => setNewData({ ...newData, fullName: e.target.value })} placeholder="اسم الموظف" className="w-full h-10 px-3 border rounded-lg" />
+          </FieldHelp>
+          <div className="space-y-1">
+            <label htmlFor="new-employee-fingerprint" className="text-xs font-medium">رقم البصمة <span className="text-destructive" aria-hidden="true">*</span></label>
+            <FieldHelp text="رقم الموظف في جهاز أو نظام البصمة، للربط والمراجعة عند الحاجة.">
+              <input id="new-employee-fingerprint" value={newData.fingerprintId} onChange={e => setNewData({ ...newData, fingerprintId: e.target.value })} required maxLength={100} className="w-full h-10 px-3 border rounded-lg" />
+            </FieldHelp>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="new-employee-national-id" className="text-xs font-medium">رقم الهوية <span className="text-destructive" aria-hidden="true">*</span></label>
+            <FieldHelp text="رقم هوية الموظف لتمييز بياناته ومنع الالتباس بين الأسماء المتشابهة.">
+              <input id="new-employee-national-id" value={newData.nationalId} onChange={e => setNewData({ ...newData, nationalId: e.target.value })} required maxLength={100} className="w-full h-10 px-3 border rounded-lg" />
+            </FieldHelp>
+          </div>
+          <FieldHelp text="رقم التواصل مع الموظف عند متابعة العهد والأصول المسندة إليه.">
+            <input value={newData.phone} onChange={e => setNewData({ ...newData, phone: e.target.value })} placeholder="رقم الهاتف" className="w-full h-10 px-3 border rounded-lg" />
+          </FieldHelp>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setShowAdd(false)}>إلغاء</Button>
+            <Button type="submit" disabled={createMut.isPending}>حفظ الموظف</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   </div>;
 }
 

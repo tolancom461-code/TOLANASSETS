@@ -1,12 +1,13 @@
 import { depreciationJournals, depreciationPeriods } from "../drizzle/schema";
-import { sql } from "drizzle-orm";
-import { financialState, jsonData } from "./depreciationStore";
+import { sql, lte } from "drizzle-orm";
+import { financialReportState, jsonData } from "./depreciationStore";
+import { reportUnitMetadata } from "./depreciationReportMetadata";
 import {
   money,
   amount,
   splitCents,
   periodTitle,
-  calculateBatch,
+  annualRate,
   policyPayload, monthStart, nextMonth,
 } from "../shared/depreciation";
 
@@ -20,18 +21,27 @@ export type ReportFilters = {
   department?: string;
   entityType?: "asset" | "custody";
   search?: string;
+  includeJournalSnapshots?: boolean;
 };
 // Approved ledger movements only. Custom mid-month dates do not manufacture daily posted journals.
 export async function depreciationReport(db: any, input: ReportFilters) {
-  const state = await financialState(db),
-    journalRows = await db.select().from(depreciationJournals),
+  const [state, journalRows, periods] = await Promise.all([
+    financialReportState(db),
+    input.includeJournalSnapshots === false
+      ? db.select({ id: depreciationJournals.id, code: depreciationJournals.code, kind: depreciationJournals.kind, effectiveDate: depreciationJournals.effectiveDate,
+          snapshot: sql`JSON_OBJECT('details', JSON_EXTRACT(${depreciationJournals.snapshot}, '$.details'))` }).from(depreciationJournals).where(lte(depreciationJournals.effectiveDate, input.to))
+      : db.select().from(depreciationJournals),
     // Reports read posted journal details, not the repeated unit snapshots in
     // every monthly calculation. Keep status, total and exceptions only.
-    periods = await db.select({
+    db.select({
       month: depreciationPeriods.month,
       status: depreciationPeriods.status,
       snapshot: sql`JSON_OBJECT('total', JSON_EXTRACT(${depreciationPeriods.snapshot}, '$.total'), 'exceptions', JSON_EXTRACT(${depreciationPeriods.snapshot}, '$.exceptions'))`,
-    }).from(depreciationPeriods);
+    }).from(depreciationPeriods),
+  ]);
+  const policy=state.policies.filter((r:any)=>r.status==="APPROVED"&&r.effectiveDate<=input.to).sort((a:any,b:any)=>b.effectiveDate.localeCompare(a.effectiveDate))[0];
+  const setup=policy?policyPayload.parse(jsonData(policy.payload)):null;
+  const reportRules = new Map(setup?.rules.map(rule => [rule.classificationId, rule]) ?? []);
   const journals = journalRows.filter((j: any) => j.effectiveDate <= input.to);
   const depreciation = journals
     .filter((j: any) => ["DEPRECIATION", "REVERSAL"].includes(j.kind))
@@ -57,15 +67,29 @@ export async function depreciationReport(db: any, input: ReportFilters) {
   const rows: any[] = [];
   const signedMoney=(v:string)=>v.startsWith("-")?-money(v.slice(1)):money(v);
   const corrections=journals.filter((j:any)=>j.kind==="CORRECTION").flatMap((j:any)=>jsonData(j.snapshot).details.map((d:any)=>({...d,effectiveDate:j.effectiveDate})));
+  const indexUnits = (records: any[]) => {
+    const index = new Map<string, any[]>();
+    for (const row of records) {
+      const key = `${row.batchId}:${row.unit}`;
+      const entries = index.get(key) ?? [];
+      entries.push(row); index.set(key, entries);
+    }
+    return index;
+  };
+  const depByUnit = indexUnits(depreciation), disposalsByUnit = indexUnits(disposals), correctionsByUnit = indexUnits(corrections);
+  const movementsByBatch = new Map<number, typeof state.movements>();
+  for (const movement of state.movements) {
+    const entries = movementsByBatch.get(movement.batchId) ?? [];
+    entries.push(movement); movementsByBatch.set(movement.batchId, entries);
+  }
   for (const batch of state.batches) {
     const p = batch.payload;
     if (p.balanceDate > input.to) continue;
-    const closing = calculateBatch(
-      batch,
-      state.movements,
-      p.balanceDate,
-      input.to
-    ).units;
+    if ((input.classificationId && batch.classificationId !== input.classificationId) || (input.entityType && batch.entityType !== input.entityType)) continue;
+    const closing = reportUnitMetadata(batch, movementsByBatch.get(batch.id) ?? [], input.to);
+    const rateRule = reportRules.get(batch.classificationId);
+    const depreciationRate = rateRule?.treatment === "DEPRECIABLE" ? annualRate(rateRule.lifeMonths) : null;
+    const depreciationRateLabel = depreciationRate === null ? (rateRule ? "غير قابل للإهلاك" : "غير مهيأ") : `${Number(depreciationRate)}%`;
     for (let index = 0; index < p.units.length; index++) {
       const unit = p.units[index],
         allocation = closing[index].allocation;
@@ -83,12 +107,8 @@ export async function depreciationReport(db: any, input: ReportFilters) {
             .includes(input.search.toLowerCase()))
       )
         continue;
-      const unitDep = depreciation.filter(
-          (l: any) => l.batchId === batch.id && l.unit === unit
-        ),
-        unitDisposals = disposals.filter(
-          (l: any) => l.batchId === batch.id && l.unit === unit
-        );
+      const key = `${batch.id}:${unit}`;
+      const unitDep = depByUnit.get(key) ?? [], unitDisposals = disposalsByUnit.get(key) ?? [];
       const sum = (data: any[], key: string, predicate: (l: any) => boolean): bigint =>
         data
           .filter(predicate)
@@ -110,7 +130,7 @@ export async function depreciationReport(db: any, input: ReportFilters) {
       const before = (l: any) => l.effectiveDate < input.from,
         inside = (l: any) => l.effectiveDate >= input.from;
       const existsBefore = p.balanceDate < input.from || (p.balanceDate === input.from && p.recognitionDate < p.balanceDate && !p.sourceMovementId);
-      const changes=corrections.filter((d:any)=>d.batchId===batch.id&&d.unit===unit);
+      const changes=correctionsByUnit.get(key) ?? [];
       const correctionSum=(key:string,predicate:(l:any)=>boolean):bigint=>changes.filter(predicate).reduce((n:bigint,d:any)=>n+signedMoney(d[key]),0n);
       const costAdjustments=correctionSum("costDelta",inside),accumAdjustments=correctionSum("accumDelta",inside),impairmentAdjustments=correctionSum("impairmentDelta",inside);
       const openingCost =
@@ -140,6 +160,7 @@ export async function depreciationReport(db: any, input: ReportFilters) {
         entityId: batch.entityId,
         ...batch.identity,
         classificationId: batch.classificationId,
+        depreciationRate, depreciationRateLabel,
         unit,
         allocation,
         lifeMonths: p.lifeMonths,
@@ -195,6 +216,8 @@ export async function depreciationReport(db: any, input: ReportFilters) {
   const groups = [...new Set(rows.map(r => r.classificationId))].map(id => ({
     classificationId: id,
     classification: rows.find(r => r.classificationId === id).classification,
+    depreciationRate: rows.find(r => r.classificationId === id).depreciationRate,
+    depreciationRateLabel: rows.find(r => r.classificationId === id).depreciationRateLabel,
     ...totals(rows.filter(r => r.classificationId === id)),
   }));
   const expenseGroups = new Map<string, any>();
@@ -234,8 +257,6 @@ export async function depreciationReport(db: any, input: ReportFilters) {
       status: p.status,
       total: jsonData(p.snapshot).total,
     }));
-  const policy=state.policies.filter((r:any)=>r.status==="APPROVED"&&r.effectiveDate<=input.to).sort((a:any,b:any)=>b.effectiveDate.localeCompare(a.effectiveDate))[0];
-  const setup=policy?policyPayload.parse(jsonData(policy.payload)):null;
   const periodStatus:Array<{month:string;status:string;total:string}>=[];
   if(setup)for(let date=monthStart(input.from)>setup.openingDate?monthStart(input.from):setup.openingDate;date.slice(0,7)<=input.to.slice(0,7);date=nextMonth(date))periodStatus.push(storedPeriodStatus.find((p:any)=>p.month===date.slice(0,7))??{month:date.slice(0,7),status:"NOT_CALCULATED",total:"0.00"});
   const total = totals(rows),
@@ -252,6 +273,7 @@ export async function depreciationReport(db: any, input: ReportFilters) {
     to: input.to,
     basis:
       "الحركات المالية المعتمدة بتاريخ القيد؛ لا يشمل احتساباً تقديرياً لأجزاء الأشهر غير المعتمدة",
+    rateBasis: "نسبة الإهلاك السنوية من سياسة التصنيف المعتمدة السارية في نهاية الفترة؛ قد يختلف العمر المثبت في الملف المالي للأصل عنها.",
     rows,
     groups,
     total,
@@ -273,7 +295,7 @@ export async function depreciationReport(db: any, input: ReportFilters) {
     exceptions: periods
       .filter((p: any) => !["APPROVED", "CLOSED"].includes(p.status))
       .flatMap((p: any) => jsonData(p.snapshot).exceptions ?? []),
-    journals: journalRows.filter(
+    journals: input.includeJournalSnapshots === false ? [] : journalRows.filter(
       (j: any) => j.effectiveDate >= input.from && j.effectiveDate <= input.to
     ),
   };

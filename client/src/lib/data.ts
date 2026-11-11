@@ -112,6 +112,7 @@ export const exclusionTypes = [
 ];
 
 export const statusLabels: Record<string, { label: string; color: string }> = {
+  CONVERTED: { label: "محوّل إلى نوع آخر", color: "bg-violet-100 text-violet-700" },
   DRAFT: { label: "مسودة بانتظار الاعتماد", color: "bg-amber-100 text-amber-700" },
   CANCELLED: { label: "مسودة ملغاة", color: "bg-slate-100 text-slate-700" },
   REPLACED: { label: "مستبدل بالضمان", color: "bg-violet-100 text-violet-700" },

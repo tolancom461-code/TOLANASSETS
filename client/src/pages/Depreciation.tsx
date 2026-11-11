@@ -1,6 +1,8 @@
 import FieldHelp from "@/components/FieldHelp";
 import { depreciationHelp } from "@/lib/fieldHelpText";
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { depreciationReportColumns as reportColumns, depreciationComparisonColumns as comparisonColumns } from "@shared/depreciationReportColumns";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
 import FinancialClassifications from "@/components/FinancialClassifications";
@@ -20,14 +22,12 @@ import {
   annualRate,
   money,
   amount,
-  financialExcelCell,
   previousDay,
   nextMonth,
   type PolicyPayload,
   type BatchPayload,
   type MovementPayload,
 } from "@shared/depreciation";
-import * as XLSX from "xlsx";
 
 const decode = (p: any) => (typeof p === "string" ? JSON.parse(p) : p);
 const labels: Record<string, string> = {
@@ -1873,22 +1873,6 @@ function Journals({ w, onSaved }: { w: any; onSaved: () => void }) {
   );
 }
 
-const reportColumns = [
-  ["classification", "التصنيف"],
-  ["openingCost", "التكلفة أول الفترة"],
-  ["additions", "إضافات / نقل قيمة للبديل"],
-  ["costAdjustments", "تصحيحات التكلفة"],
-  ["removedCost", "تكلفة المستبعد / السابق"],
-  ["closingCost", "التكلفة آخر الفترة"],
-  ["openingAccum", "المجمع أول الفترة"],
-  ["carriedAccum", "مجمع منقول للبديل"],
-  ["charge", "إهلاك الفترة"],
-  ["accumAdjustments", "تصحيحات المجمع"],
-  ["removedAccum", "مجمع المستبعد / السابق"],
-  ["closingAccum", "المجمع آخر الفترة"],
-  ["closingImpairment", "انخفاض القيمة"],
-  ["net", "صافي القيمة الدفترية"],
-];
 function FinancialReports() {
   const [from, setFrom] = useState(`${dateNow().slice(0, 4)}-01-01`),
     [to, setTo] = useState(dateNow()),
@@ -1902,47 +1886,37 @@ function FinancialReports() {
     [view, setView] = useState("summary"),
     [compareFrom, setCompareFrom] = useState(""),
     [compareTo, setCompareTo] = useState("");
+  const filters = useMemo(() => ({ from, to,
+    classificationId: classificationId ? Number(classificationId) : undefined,
+    costCenter: costCenter || undefined, location: location || undefined,
+    branch: branch || undefined, department: department || undefined,
+    entityType: (entityType as "asset" | "custody") || undefined,
+    search: search || undefined, includeJournalSnapshots: false,
+  }), [from, to, classificationId, costCenter, location, branch, department, entityType, search]);
+  const settledFilters = useDebouncedValue(filters);
+  const comparisonFilters = useMemo(() => ({ ...settledFilters, from: compareFrom, to: compareTo }), [settledFilters, compareFrom, compareTo]);
+  const settledComparisonFilters = useDebouncedValue(comparisonFilters);
+  const filterPending = filters !== settledFilters;
+  const comparePending = comparisonFilters !== settledComparisonFilters;
   const classes = trpc.depreciation.classifications.useQuery(),
     report = trpc.depreciation.report.useQuery(
-      {
-        from,
-        to,
-        classificationId: classificationId
-          ? Number(classificationId)
-          : undefined,
-        costCenter: costCenter || undefined,
-        location: location || undefined,
-        branch: branch || undefined,
-        department: department || undefined,
-        entityType: (entityType as "asset" | "custody") || undefined,
-        search: search || undefined,
-      },
-      { enabled: !!from && !!to && from <= to }
+      settledFilters,
+      { enabled: !!from && !!to && from <= to && !filterPending, staleTime: 30_000, refetchOnWindowFocus: false, placeholderData: previous => previous }
     ),
     p = report.data;
   const comparison = trpc.depreciation.report.useQuery(
-    {
-      from: compareFrom,
-      to: compareTo,
-      classificationId: classificationId ? Number(classificationId) : undefined,
-      costCenter: costCenter || undefined,
-      location: location || undefined,
-      branch: branch || undefined,
-      department: department || undefined,
-      entityType: (entityType as "asset" | "custody") || undefined,
-      search: search || undefined,
-    },
-    { enabled: !!compareFrom && !!compareTo && compareFrom <= compareTo }
+    settledComparisonFilters,
+    { enabled: !!compareFrom && !!compareTo && compareFrom <= compareTo && !comparePending && !filterPending, staleTime: 30_000, refetchOnWindowFocus: false, placeholderData: previous => previous }
   );
-  const comparisonColumns = [
-    ["classification", "التصنيف"],
-    ["previousCharge", "مصروف الفترة المقارنة"],
-    ["currentCharge", "مصروف الفترة الحالية"],
-    ["chargeChange", "تغير المصروف"],
-    ["previousNet", "صافي الفترة المقارنة"],
-    ["currentNet", "صافي الفترة الحالية"],
-    ["netChange", "تغير الصافي"],
-  ];
+  const reportBusy = !from || !to || from > to || filterPending || report.isFetching || report.isPlaceholderData || !!report.error;
+  const comparisonInvalid = !!(compareFrom || compareTo) && (!compareFrom || !compareTo || compareFrom > compareTo);
+  const comparisonBusy = comparisonInvalid || comparePending || comparison.isFetching || comparison.isPlaceholderData || !!comparison.error;
+  const [rowPage, setRowPage] = useState(1);
+  const pageSize = 50;
+  const displayRows = useMemo(() => !p ? [] : view === "summary" ? p.groups : view === "expense" ? p.expenses : view === "exceptions" ? p.periodStatus : p.rows.filter((r: any) => view !== "fully" || r.fullyDepreciated), [p, view]);
+  const pageCount = Math.max(1, Math.ceil(displayRows.length / pageSize));
+  const visibleRows = displayRows.slice((rowPage - 1) * pageSize, rowPage * pageSize);
+  useEffect(() => setRowPage(1), [p, view]);
   const comparisonRows =
     p && comparison.data
       ? Array.from(
@@ -1980,64 +1954,27 @@ function FinancialReports() {
           };
         })
       : [];
-  const comparisonTitle = comparison.data
+  const comparisonTitle = comparison.data && compareFrom && compareTo
     ? `${p?.title} — مقارنة مع ${comparison.data.title}`
     : "";
-  const exportReport = () => {
-    if (!p) return;
-    const wb = XLSX.utils.book_new();
-    const textColumns=new Set(['classification','code','name','unit','costCenter','location','branch','department']);
-    const cell=(key:string,value:any)=>!textColumns.has(key)&&typeof value==='string'?financialExcelCell(value):value;
-    const formatMoney=(ws:XLSX.WorkSheet)=>{for(const key of Object.keys(ws))if(!key.startsWith('!')&&ws[key].t==='n')ws[key].z='#,##0.00';};
-    const tables = [
-      ["الإجمالي حسب التصنيف", p.groups, reportColumns],
-      [
-        "السجل المالي",
-        p.rows,
-        [
-          ["code", "الرمز"],
-          ["name", "الاسم"],
-          ["unit", "الوحدة"],
-          ...reportColumns,
-        ],
-      ],
-      [
-        "مصروف حسب التخصيص",
-        p.expenses,
-        [
-          ["classification", "التصنيف"],
-          ["costCenter", "مركز التكلفة"],
-          ["location", "الموقع"],
-          ["branch", "الفرع"],
-          ["department", "القسم"],
-          ["value", "مصروف الإهلاك"],
-        ],
-      ],
-    ] as const;
-    for (const [name, rows, columns] of tables) {
-      const ws = XLSX.utils.aoa_to_sheet([
-        [p.title],
-        [p.basis],
-        columns.map(c => c[1]),
-        ...rows.map((r: any) => columns.map(c => cell(c[0],r[c[0]]))),
-      ]);
-      ws["!cols"] = columns.map(() => ({ wch: 24 }));
-      formatMoney(ws);
-      XLSX.utils.book_append_sheet(wb, ws, name);
-    }
-    wb.Workbook = { Views: [{ RTL: true }] };
-    if (comparison.data) {
-      const ws = XLSX.utils.aoa_to_sheet([
-        [comparisonTitle],
-        [p.basis],
-        comparisonColumns.map(c => c[1]),
-        ...comparisonRows.map((r: any) => comparisonColumns.map(c => cell(c[0],r[c[0]]))),
-      ]);
-      ws["!cols"] = comparisonColumns.map(() => ({ wch: 26 }));
-      formatMoney(ws);
-      XLSX.utils.book_append_sheet(wb, ws, "مقارنة الفترات");
-    }
-    XLSX.writeFile(wb, `depreciation-report-${from}-${to}.xlsx`);
+  const [exporting, setExporting] = useState(false);
+  const exportReport = async () => {
+    if (!p || reportBusy || exporting) return;
+    setExporting(true);
+    try {
+      const { depreciationReportExcel } = await import("@shared/depreciationReportExcel");
+      const bytes = await depreciationReportExcel(p, comparison.data && compareFrom && compareTo && !comparisonBusy ? { title: comparisonTitle, rows: comparisonRows } : undefined);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `depreciation-report-${p.from}-${p.to}.xlsx`;
+      document.body.appendChild(link);
+      link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast.success("تم تنزيل تقرير الإهلاك");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "تعذر تصدير تقرير الإهلاك");
+    } finally { setExporting(false); }
   };
   return (
     <div className="space-y-5 financial-report">
@@ -2123,7 +2060,10 @@ function FinancialReports() {
       {compareFrom && compareTo && compareFrom > compareTo && (
         <p role="alert" className="text-destructive">تاريخ بداية فترة المقارنة يجب ألا يتجاوز تاريخ نهايتها.</p>
       )}
-      {report.isFetching && (
+      {!!(compareFrom || compareTo) && (!compareFrom || !compareTo) && (
+        <p role="alert" className="text-amber-700">أكمل بداية ونهاية فترة المقارنة، أو امسح الحقلين للتصدير دون مقارنة.</p>
+      )}
+      {from && to && from <= to && (filterPending || report.isFetching || report.isLoading) && (
         <p role="status" className="text-sm text-muted-foreground">جارٍ إعداد التقرير للفترة المحددة…</p>
       )}
       {report.error && (
@@ -2134,7 +2074,7 @@ function FinancialReports() {
           {comparison.error && (
             <p className="text-destructive">{comparison.error.message}</p>
           )}
-          {comparison.data && (
+          {comparison.data && compareFrom && compareTo && (
             <Box title={comparisonTitle}>
               <p className="text-xs">
                 الحركات المعتمدة فقط؛ طول الفترتين حسب اختيار المستخدم.
@@ -2147,6 +2087,7 @@ function FinancialReports() {
               )}
               <Button
                 variant="outline"
+                disabled={reportBusy || comparisonBusy}
                 onClick={() => {
                   if (
                     !openFinancialPrint(
@@ -2187,11 +2128,12 @@ function FinancialReports() {
             </Box>
           )}
           <div className="flex gap-2 print:hidden">
-            <Button variant="outline" onClick={exportReport}>
-              تصدير التقرير Excel
+            <Button variant="outline" onClick={() => void exportReport()} disabled={reportBusy || exporting || (!!(compareFrom || compareTo) && comparisonBusy)}>
+              {exporting ? "جارٍ إعداد ملف Excel…" : "تصدير التقرير Excel"}
             </Button>
             <Button
               variant="outline"
+              disabled={reportBusy}
               onClick={() => {
                 if (!openFinancialPrint(p, view, reportColumns))
                   toast.error("اسمح بفتح نافذة الطباعة في المتصفح");
@@ -2199,8 +2141,10 @@ function FinancialReports() {
             >
               طباعة
             </Button>
+            <Button variant="outline" disabled={reportBusy} onClick={() => { void report.refetch(); if (compareFrom && compareTo) void comparison.refetch(); }}>تحديث التقرير</Button>
           </div>
           <p className="text-xs text-muted-foreground">{p.basis}</p>
+          <p className="text-xs text-muted-foreground">{p.rateBasis}</p>
           {p.pendingMonths.length > 0 && (
             <p className="text-sm text-amber-700">
               فترات لم تعتمد بعد: {p.pendingMonths.join("، ")}. الأرقام تعرض
@@ -2233,9 +2177,9 @@ function FinancialReports() {
                 : "يوجد فرق بين السجل والقيود؛ راجع مصادر البيانات."}
             </p>
           )}
-          <div className="overflow-auto">
+          <div className="overflow-auto max-h-[65vh] rounded-lg border">
             <table className="text-sm w-full min-w-[1000px]">
-              <thead className="bg-muted">
+              <thead className="sticky top-0 z-10 bg-muted">
                 <tr>
                   {(view === "expense"
                     ? [
@@ -2265,7 +2209,7 @@ function FinancialReports() {
               </thead>
               <tbody>
                 {view === "expense"
-                  ? p.expenses.map((r: any, i: number) => (
+                  ? visibleRows.map((r: any, i: number) => (
                       <tr key={i} className="border-t">
                         {[
                           "classification",
@@ -2282,19 +2226,14 @@ function FinancialReports() {
                       </tr>
                     ))
                   : view === "exceptions"
-                    ? p.periodStatus.map((r: any) => (
+                    ? visibleRows.map((r: any) => (
                         <tr key={r.month} className="border-t">
                           <td className="p-3">{r.month}</td>
                           <td>{labels[r.status]}</td>
                           <td>{r.total}</td>
                         </tr>
                       ))
-                    : (view === "summary"
-                        ? p.groups
-                        : p.rows.filter(
-                            (r: any) => view !== "fully" || r.fullyDepreciated
-                          )
-                      ).map((r: any, i: number) => (
+                    : visibleRows.map((r: any, i: number) => (
                         <tr key={i} className="border-t">
                           {(view === "summary"
                             ? reportColumns
@@ -2313,6 +2252,10 @@ function FinancialReports() {
                       ))}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span>عرض {displayRows.length ? (rowPage - 1) * pageSize + 1 : 0} إلى {Math.min(rowPage * pageSize, displayRows.length)} من {displayRows.length} سجل. التصدير والطباعة يشملان جميع النتائج.</span>
+            <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={rowPage <= 1} onClick={() => setRowPage(p => p - 1)}>السابق</Button><span>{rowPage} / {pageCount}</span><Button size="sm" variant="outline" disabled={rowPage >= pageCount} onClick={() => setRowPage(p => p + 1)}>التالي</Button></div>
           </div>
           {view === "exceptions" &&
             p.exceptions.map((e: any, i: number) => (

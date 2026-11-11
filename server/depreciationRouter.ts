@@ -289,7 +289,7 @@ export const depreciationRouter = router({
           code: r.assetCode,
         })),
         ...state.custodyRows.map((r: any) => ({ ...r, entityType: "custody" })),
-      ].filter((r: any) => !["DRAFT", "CANCELLED"].includes(r.status)),
+      ].filter((r: any) => !["DRAFT", "CANCELLED", "CONVERTED"].includes(r.status)),
     };
   }),
   periodDetails: operatorProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => {
@@ -1048,6 +1048,7 @@ export const depreciationRouter = router({
         department: z.string().optional(),
         entityType: z.enum(["asset", "custody"]).optional(),
         search: z.string().optional(),
+        includeJournalSnapshots: z.boolean().optional(),
       })
     )
     .query(async ({ input }) => depreciationReport(await database(), input)),

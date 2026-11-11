@@ -6,6 +6,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
+import { InventoryConversionLinks } from "@/components/InventoryConversion";
 import {
   Search, Activity, ArrowLeftRight, PenLine, PlusCircle,
   XCircle, ChevronDown, ChevronUp, X, Box, HandCoins,
@@ -21,6 +22,10 @@ const EVENT_CONFIG: Record<string, {
   border: string;
   dot: string;
 }> = {
+  CONVERT_OUT: {label:"تحويل إلى نوع آخر",icon:ArrowLeftRight,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  CONVERT_IN: {label:"وارد بالتحويل",icon:ArrowLeftRight,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
+  CONVERT_REQUEST: {label:"طلب تحويل",icon:Clock,color:"text-amber-700",bg:"bg-amber-50",border:"border-amber-200",dot:"bg-amber-500"},
+  CONVERT_CANCEL: {label:"إلغاء طلب تحويل",icon:XCircle,color:"text-muted-foreground",bg:"bg-muted",border:"border-border",dot:"bg-muted-foreground"},
   WARRANTY: {label:"استبدال بالضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
   WARRANTY_REQUEST: {label:"طلب ضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
   WARRANTY_EDIT: {label:"تعديل مسودة الضمان",icon:FileText,color:"text-violet-700",bg:"bg-violet-50",border:"border-violet-200",dot:"bg-violet-500"},
@@ -87,6 +92,7 @@ const getEventConfig = (actionType: string) =>
 
 // ─── ترجمة أسماء الحقول ──────────────────────────────────────────────────────
 const FIELD_LABELS: Record<string, string> = {
+  conversion: "بيانات التحويل", conversionId: "رقم طلب التحويل", sourceType: "نوع المصدر", sourceId: "السجل السابق", sourceCode: "الرمز السابق", targetType: "نوع الوجهة", targetId: "السجل الجديد", targetCode: "الرمز الجديد", executedByName: "نفذه", executedAt: "وقت التنفيذ",
   job: "الوظيفة", jobTitle: "الوظيفة", employeeName: "الموظف", branchId: "الفرع", branchName: "الفرع", locationName: "الموقع", departmentName: "القسم",
   entityCode: "رمز السجل", entityName: "اسم السجل", entityType: "نوع السجل", exclusionCode: "رقم الاستبعاد", exclusionMode: "نطاق الاستبعاد", originalQuantity: "الكمية الأصلية", excludedQuantity: "إجمالي المستبعد", excludedBy: "منفذ الاستبعاد", exclusionDate: "وقت تسجيل الاستبعاد", oldEmployeeName: "الموظف وقت العملية", oldDepartmentName: "القسم وقت العملية", oldLocationName: "الموقع وقت العملية", warrantyReplacedQuantity: "المستبدل بالضمان", actualQuantity: "الكمية الفعلية", expectedQuantity: "الكمية المتوقعة", difference: "الفرق", unitIdentifiers: "معرفات الوحدات", createdByName: "أضافه", destination: "التخصيص الجديد", source: "التخصيص السابق",
   quantityBefore:"المتبقي قبل العملية", quantityExcluded:"المستبعد في العملية", quantityRemaining:"المتبقي بعد العملية", previouslyExcluded:"المستبعد سابقاً", originalUnitValue:"قيمة الوحدة الأصلية", effectiveDate:"تاريخ السريان", responsibleData:"المسؤولون", exclusionImages:"المرفقات الأصلية", inventoryResult:"نتيجة الجرد", fileName:"اسم المرفق", approvedByName:"المعتمد", approvedAt:"وقت الاعتماد", reviewNote:"ملاحظات المراجعة", entitySnapshot:"بيانات السجل وقت الاستبعاد", transferSnapshot:"بيانات النقل التاريخية", item:"نتيجة العنصر في الجرد",
@@ -489,6 +495,7 @@ export default function Tracking() {
         </div>
 
         {/* الخط الزمني */}
+        {selectedEntity && <InventoryConversionLinks entityType={selectedEntity.type} entityId={selectedEntity.id} />}
         {!selectedEntity ? (
           <div className="text-center py-20">
             <div className="w-16 h-16 rounded-2xl bg-muted/40 flex items-center justify-center mx-auto mb-4">

@@ -44,15 +44,15 @@ function rethrowDeleteConstraint(error: unknown, entityLabel: string): never {
 }
 
 // =============================================
-// الترميز الهرمي: الموقع → الفرع → القسم → الموظف
+// الترميز الهرمي: الموقع → الفرع → القسم
 // =============================================
 const prefixInput = z.string().trim().max(40).optional().nullable();
 
 async function assertHierarchyEmpty(tx: any, departmentIds: number[]) {
   if (!departmentIds.length) return;
-  for (const table of [assets, custodyItems, employees]) {
+  for (const table of [assets, custodyItems]) {
     const [linked] = await tx.select({id:table.id}).from(table).where(inArray(table.departmentId, departmentIds)).limit(1);
-    if (linked) throw new TRPCError({code:'CONFLICT',message:'لا يمكن تغيير تبعية قسم أو فرع مرتبط بموظفين أو أصول أو عهد. استخدم حركات النقل المعتمدة؛ لن تتغير مواقع السجلات من الإعدادات.'});
+    if (linked) throw new TRPCError({code:'CONFLICT',message:'لا يمكن تغيير تبعية قسم أو فرع مرتبط بأصول أو عهد. استخدم حركات النقل المعتمدة؛ لن تتغير مواقع السجلات من الإعدادات.'});
   }
 }
 
@@ -83,7 +83,6 @@ async function assertPrefixAvailable(db: any, kind: "asset" | "custody", prefix:
 const padCode = (value: number, width: number) => String(value).padStart(width, "0");
 const makeBranchCode = (locationCode: string, seq: number) => `${locationCode}-${padCode(seq, 2)}`;
 const makeDepartmentCode = (branchCode: string, seq: number) => `${branchCode}-${padCode(seq, 3)}`;
-const makeEmployeeCode = (departmentCode: string, seq: number) => `${departmentCode}-${padCode(seq, 4)}`;
 
 async function ensureAppSettingsRow(tx: any) {
   await tx.insert(appSettings).values({ id: 1 }).onDuplicateKeyUpdate({ set: { id: 1 } });
@@ -95,23 +94,6 @@ async function cascadeBranchHierarchyCodes(tx: any, branchId: number, branchCode
     if (!department.sequenceNo) continue;
     const departmentCode = makeDepartmentCode(branchCode, department.sequenceNo);
     await tx.update(departments).set({ code: departmentCode, locationId }).where(eq(departments.id, department.id));
-    const departmentEmployees = await tx.select().from(employees).where(eq(employees.departmentId, department.id));
-    for (const employee of departmentEmployees) {
-      if (!employee.sequenceNo) continue;
-      await tx.update(employees)
-        .set({ code: makeEmployeeCode(departmentCode, employee.sequenceNo) })
-        .where(eq(employees.id, employee.id));
-    }
-  }
-}
-
-async function cascadeDepartmentEmployeeCodes(tx: any, departmentId: number, departmentCode: string) {
-  const departmentEmployees = await tx.select().from(employees).where(eq(employees.departmentId, departmentId));
-  for (const employee of departmentEmployees) {
-    if (!employee.sequenceNo) continue;
-    await tx.update(employees)
-      .set({ code: makeEmployeeCode(departmentCode, employee.sequenceNo) })
-      .where(eq(employees.id, employee.id));
   }
 }
 
@@ -176,7 +158,6 @@ const departmentsRouter = router({
           const code = makeDepartmentCode(lockedBranch.code, sequenceNo);
           await tx.update(branches).set({ departmentSequence: sequenceNo }).where(eq(branches.id, lockedBranch.id));
           await tx.update(departments).set({name:input.name,branchId:input.branchId,locationId:lockedBranch.locationId,code,sequenceNo}).where(eq(departments.id,input.id));
-          await cascadeDepartmentEmployeeCodes(tx, input.id, code);
         } else {
           await tx.update(departments).set({name:input.name,locationId:branch.locationId}).where(eq(departments.id,input.id));
         }
@@ -190,7 +171,6 @@ const departmentsRouter = router({
   delete: operatorProcedure.input(z.object({id:z.number()})).mutation(async ({input,ctx})=>{
     const db=await getDb(); if(!db) throw new TRPCError({code:"INTERNAL_SERVER_ERROR"});
     const [old]=await db.select().from(departments).where(eq(departments.id,input.id)).limit(1); if(!old) throw new TRPCError({code:"NOT_FOUND",message:"القسم غير موجود"});
-    if((await db.select({id:employees.id}).from(employees).where(eq(employees.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بموظفين."});
     if((await db.select({id:assets.id}).from(assets).where(eq(assets.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بأصول مسجلة."});
     if((await db.select({id:custodyItems.id}).from(custodyItems).where(eq(custodyItems.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بعهد مسجلة."});
     if((await db.select({id:inventorySessions.id}).from(inventorySessions).where(eq(inventorySessions.departmentId,input.id)).limit(1))[0]) throw new TRPCError({code:"CONFLICT",message:"لا يمكن حذف القسم لأنه مرتبط بجلسات جرد."});
@@ -339,66 +319,51 @@ const employeesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     return db.select({
-      id: employees.id, fullName: employees.fullName, code: employees.code, sequenceNo: employees.sequenceNo, departmentId: employees.departmentId,
-      departmentName: departments.name, departmentCode: departments.code, branchId: departments.branchId, branchName: branches.name, branchCode: branches.code,
-      locationId: branches.locationId, locationName: locations.name, locationCode: locations.code,
+      id: employees.id, fullName: employees.fullName,
       fingerprintId: employees.fingerprintId, nationalId: employees.nationalId, phone: employees.phone,
       createdAt: employees.createdAt, updatedAt: employees.updatedAt,
     }).from(employees)
-      .leftJoin(departments, eq(employees.departmentId, departments.id))
-      .leftJoin(branches, eq(departments.branchId, branches.id))
-      .leftJoin(locations, eq(branches.locationId, locations.id))
-      .orderBy(employees.code, employees.fullName);
+      .orderBy(employees.fullName, employees.id);
   }),
 
   create: operatorProcedure
-    .input(z.object({ fullName: z.string().min(1).max(255), departmentId: z.number(), fingerprintId: z.string().max(100).optional().nullable(), nationalId: z.string().max(100).optional().nullable(), phone: z.string().max(50).optional().nullable() }))
+    .input(z.object({
+      fullName: z.string().min(1).max(255),
+      fingerprintId: z.string({ error: "رقم البصمة مطلوب" }).trim().min(1, "رقم البصمة مطلوب").max(100),
+      nationalId: z.string({ error: "رقم الهوية مطلوب" }).trim().min(1, "رقم الهوية مطلوب").max(100),
+      phone: z.string().max(50).optional().nullable(),
+    }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const created = await db.transaction(async (tx) => {
-        await tx.execute(sql`SELECT id FROM departments WHERE id = ${input.departmentId} FOR UPDATE`);
-        const [department] = await tx.select().from(departments).where(eq(departments.id, input.departmentId)).limit(1);
-        if (!department || !department.code) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد غير موجود أو لا يملك كوداً" });
-        const sequenceNo = Number(department.employeeSequence) + 1;
-        const code = makeEmployeeCode(department.code, sequenceNo);
-        await tx.update(departments).set({employeeSequence:sequenceNo}).where(eq(departments.id,department.id));
-        const result = await tx.insert(employees).values({ fullName: input.fullName, code, sequenceNo, departmentId: input.departmentId, fingerprintId: input.fingerprintId || null, nationalId: input.nationalId || null, phone: input.phone || null });
-        return {id:Number(result[0].insertId),code,sequenceNo};
-      });
-      await logAuditAction({ tableName: "employees", recordId: created.id, actionType: "CREATE", actionDescription: `إضافة موظف: ${input.fullName} (${created.code})`, newData: {...input,...created}, performedBy: ctx.user.id, performedByName: ctx.user.name || undefined, ipAddress: ctx.req.ip || undefined, userAgent: ctx.req.headers["user-agent"] || undefined });
-      return { ...created, ...input };
+      const data = { ...input, phone: input.phone || null, departmentId: null, code: null, sequenceNo: null };
+      const [result] = await db.insert(employees).values(data);
+      const created = { id: Number(result.insertId), ...data };
+      await logAuditAction({ tableName: "employees", recordId: created.id, actionType: "CREATE", actionDescription: `إضافة موظف: ${input.fullName}`, newData: created, performedBy: ctx.user.id, performedByName: ctx.user.name || undefined, ipAddress: ctx.req.ip || undefined, userAgent: ctx.req.headers["user-agent"] || undefined });
+      return created;
     }),
 
   update: operatorProcedure
-    .input(z.object({ id: z.number(), fullName: z.string().min(1).max(255), departmentId: z.number(), fingerprintId: z.string().max(100).optional().nullable(), nationalId: z.string().max(100).optional().nullable(), phone: z.string().max(50).optional().nullable() }))
+    .input(z.object({ id: z.number(), fullName: z.string().min(1).max(255), fingerprintId: z.string().max(100).optional().nullable(), nationalId: z.string().max(100).optional().nullable(), phone: z.string().max(50).optional().nullable() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [old] = await db.select().from(employees).where(eq(employees.id, input.id)).limit(1);
-      if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
-
-      await db.transaction(async (tx) => {
-        let code = old.code;
-        let sequenceNo = old.sequenceNo;
-        if (old.departmentId !== input.departmentId || !code || !sequenceNo) {
-          await tx.execute(sql`SELECT id FROM departments WHERE id = ${input.departmentId} FOR UPDATE`);
-          const [department] = await tx.select().from(departments).where(eq(departments.id, input.departmentId)).limit(1);
-          if (!department || !department.code) throw new TRPCError({ code: "BAD_REQUEST", message: "القسم المحدد غير موجود أو لا يملك كوداً" });
-          sequenceNo = Number(department.employeeSequence) + 1;
-          code = makeEmployeeCode(department.code, sequenceNo);
-          await tx.update(departments).set({employeeSequence:sequenceNo}).where(eq(departments.id,department.id));
-        }
-        await tx.update(employees).set({ fullName: input.fullName, code, sequenceNo, departmentId: input.departmentId, fingerprintId: input.fingerprintId || null, nationalId: input.nationalId || null, phone: input.phone || null }).where(eq(employees.id, input.id));
+      const changes = {
+        fullName: input.fullName,
+        fingerprintId: input.fingerprintId || null,
+        nationalId: input.nationalId || null,
+        phone: input.phone || null,
+      };
+      const { old, updated } = await db.transaction(async (tx) => {
+        const [old] = await tx.select().from(employees).where(eq(employees.id, input.id)).for("update");
+        if (!old) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+        await tx.update(employees).set(changes).where(eq(employees.id, input.id));
+        const [updated] = await tx.select().from(employees).where(eq(employees.id, input.id)).limit(1);
+        return { old, updated };
       });
 
-      const [updated] = await db.select().from(employees).where(eq(employees.id,input.id)).limit(1);
-      const changedFields: string[] = [];
-      if (old.fullName !== input.fullName) changedFields.push('fullName');
-      if (old.departmentId !== input.departmentId) changedFields.push('departmentId', 'code');
-      if (old.fingerprintId !== (input.fingerprintId || null)) changedFields.push('fingerprintId');
-      if (old.nationalId !== (input.nationalId || null)) changedFields.push('nationalId');
-      if (old.phone !== (input.phone || null)) changedFields.push('phone');
+      const changedFields = (Object.keys(changes) as (keyof typeof changes)[])
+        .filter(field => old[field] !== changes[field]);
       await logAuditAction({ tableName: "employees", recordId: input.id, actionType: "UPDATE", actionDescription: `تعديل موظف: ${old.fullName} - تغيير ${changedFields.length} حقل`, oldData: old, newData: updated, changedFields, performedBy: ctx.user.id, performedByName: ctx.user.name || undefined, ipAddress: ctx.req.ip || undefined, userAgent: ctx.req.headers["user-agent"] || undefined });
       return { success: true };
     }),

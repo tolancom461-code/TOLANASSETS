@@ -27,7 +27,11 @@ export async function runSecurityDatabase(database:mysql.Pool) {
  const reused=await sdk.createSessionToken('qa-old-principal');await database.query("DELETE FROM users WHERE openId='qa-old-principal'");await database.query("INSERT INTO users(openId,username,passwordHash,name,role,loginMethod) VALUES('qa-new-principal','reused-user',?,'New','admin','local')",[await bcrypt.hash(password,10)]);
  assert.equal(await sdk.verifySession(reused),null);assert.equal((await sdk.authenticateRequest(request(await login('reused-user')))).openId,'qa-new-principal');passed('Username deletion/reuse cannot transfer old authority');
  const site=await ownerApi().settings.locations.create({name:'Security Site',assetPrefix:'SEC',custodyPrefix:'SC'});const branch=await ownerApi().settings.branches.create({name:'Security Branch',locationId:site.id});const dept=await ownerApi().settings.departments.create({name:'Security Department',branchId:branch.id});
- await ownerApi().settings.employees.create({fullName:'Security employee',departmentId:dept.id});const [employees]:any=await database.query('SELECT id FROM employees');const employeeId=employees[0].id;
+ const {id:employeeId}=await ownerApi().settings.employees.create({
+  fullName:'Security employee',
+  fingerprintId:'0002',
+  nationalId:'0000000002',
+ });
  const key='images/asset/security-test.webp',path='/api/files/'+key;
  await database.query("INSERT INTO assets(assetName,quantity,assignedTo,departmentId,locationId,status,assetImagePath) VALUES('Security attachment',1,?,?,?,'ACTIVE',?)",[employeeId,dept.id,site.id,path]);
  const employee={id:999,role:'employee',employeeId}as any;

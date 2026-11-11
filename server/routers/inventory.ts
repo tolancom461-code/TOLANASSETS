@@ -2,7 +2,7 @@
  * Inventory Router - الأصول والعهد
  */
 import { z } from "zod";
-import { eq, like, and, or, sql, desc } from "drizzle-orm";
+import { eq, ne, like, and, or, sql, desc } from "drizzle-orm";
 import { protectedProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
 import {
@@ -29,6 +29,7 @@ function inventoryWhere(kind: "asset" | "custody", input: z.infer<typeof invento
   const name = kind === "asset" ? assets.assetName : custodyItems.name;
   const code = kind === "asset" ? assets.assetCode : custodyItems.code;
   const conditions = [];
+  if (input?.status !== "CONVERTED") conditions.push(ne(table.status, "CONVERTED"));
   if (input?.search?.trim()) {
     const q = '%' + input.search.trim() + '%';
     conditions.push(or(...[name, code, employees.fullName, departments.name, locations.name, table.condition, table.status, table.notes].map(column => like(column, q)), sql`CAST(${table.assetValue} AS CHAR) LIKE ${q}`));
@@ -38,7 +39,7 @@ function inventoryWhere(kind: "asset" | "custody", input: z.infer<typeof invento
   if (input?.status) conditions.push(eq(table.status, input.status as any));
   if (user.role === "employee") {
     if (!user.employeeId) throw new TRPCError({code: "FORBIDDEN", message: "الحساب غير مرتبط بسجل موظف"});
-    conditions.push(eq(table.assignedTo, user.employeeId), sql`${table.status} NOT IN ('DRAFT', 'CANCELLED')`);
+    conditions.push(eq(table.assignedTo, user.employeeId), sql`${table.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`);
   }
   return conditions.length ? and(...conditions) : undefined;
 }
@@ -145,7 +146,7 @@ const assetsRouter = router({
         .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(assets.locationId, locations.id))
         .where(ctx.user.role === "employee"
-          ? and(eq(assets.id, input.id), eq(assets.assignedTo, ctx.user.employeeId ?? -1), sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`)
+          ? and(eq(assets.id, input.id), eq(assets.assignedTo, ctx.user.employeeId ?? -1), sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`)
           : eq(assets.id, input.id))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل غير موجود" });
@@ -160,11 +161,11 @@ const assetsRouter = router({
     const [result] = await db
       .select({
         total: sql<number>`COUNT(*)`,
-        totalValue: sql<string>`COALESCE(SUM(CAST(${assets.assetValue} AS DECIMAL(12,2)) * GREATEST(${assets.quantity} - ${assets.warrantyReplacedQuantity}, 0)), 0)`,
+        totalValue: sql<string>`COALESCE(SUM(CAST(${assets.assetValue} AS DECIMAL(12,2)) * GREATEST(${assets.quantity} - COALESCE(${assets.excludedQuantity}, 0) - ${assets.warrantyReplacedQuantity}, 0)), 0)`,
         activeCount: sql<number>`SUM(CASE WHEN ${assets.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       })
       .from(assets)
-      .where(and(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED')`, ctx.user.role === "employee" ? eq(assets.assignedTo, ctx.user.employeeId ?? -1) : undefined));
+      .where(and(sql`${assets.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`, ctx.user.role === "employee" ? eq(assets.assignedTo, ctx.user.employeeId ?? -1) : undefined));
     return result;
   }),
 });
@@ -258,7 +259,7 @@ const custodyRouter = router({
         .leftJoin(branches, eq(departments.branchId, branches.id))
         .leftJoin(locations, eq(custodyItems.locationId, locations.id))
         .where(ctx.user.role === "employee"
-          ? and(eq(custodyItems.id, input.id), eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1), sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`)
+          ? and(eq(custodyItems.id, input.id), eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1), sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`)
           : eq(custodyItems.id, input.id))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "العهدة غير موجودة" });
@@ -273,11 +274,11 @@ const custodyRouter = router({
     const [result] = await db
       .select({
         total: sql<number>`COUNT(*)`,
-        totalValue: sql<string>`COALESCE(SUM(CAST(${custodyItems.assetValue} AS DECIMAL(12,2)) * GREATEST(${custodyItems.quantity} - ${custodyItems.warrantyReplacedQuantity}, 0)), 0)`,
+        totalValue: sql<string>`COALESCE(SUM(CAST(${custodyItems.assetValue} AS DECIMAL(12,2)) * GREATEST(${custodyItems.quantity} - COALESCE(${custodyItems.excludedQuantity}, 0) - ${custodyItems.warrantyReplacedQuantity}, 0)), 0)`,
         activeCount: sql<number>`SUM(CASE WHEN ${custodyItems.status} = 'ACTIVE' THEN 1 ELSE 0 END)`,
       })
       .from(custodyItems)
-      .where(and(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED')`, ctx.user.role === "employee" ? eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1) : undefined));
+      .where(and(sql`${custodyItems.status} NOT IN ('DRAFT', 'CANCELLED', 'CONVERTED')`, ctx.user.role === "employee" ? eq(custodyItems.assignedTo, ctx.user.employeeId ?? -1) : undefined));
     return result;
   }),
 });
