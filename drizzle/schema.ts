@@ -506,7 +506,7 @@ export type InsertCustodyDocument = typeof custodyDocuments.$inferInsert;
 // =============================================
 export const archiveDocuments = mysqlTable("archive_documents", {
   id: int("id").autoincrement().primaryKey(),
-  entityType: varchar("entityType", { length: 30 }).notNull(), // 'asset' | 'custody' | 'documentation_asset' | 'documentation_custody'
+  entityType: varchar("entityType", { length: 30 }).notNull(), // asset, custody, documentation_asset, documentation_custody, total_transfer
   operationType: varchar("operationType", { length: 50 }).notNull(),
   assetId: int("assetId"),
   custodyId: int("custodyId"),

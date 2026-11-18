@@ -9,6 +9,7 @@ import { escapeHtml } from "@shared/html";
 
 interface DepartmentItems {
   department: string;
+  groupKey?: string;
   items: { id: number; name: string; code: string; quantity: number }[];
 }
 
@@ -37,10 +38,11 @@ export function generateClearanceReport(data: ClearanceReportData): string {
   const totalAll = totalAssets + totalCustody;
 
   // تجميع الأقسام الفريدة
-  const allDepartments = new Set<string>();
-  data.assets.forEach(a => allDepartments.add(a.department));
-  data.custody.forEach(c => allDepartments.add(c.department));
-  const departments = Array.from(allDepartments).sort();
+  const departmentKey = (group: DepartmentItems) => group.groupKey ?? group.department;
+  const departmentLabels = new Map([...data.assets, ...data.custody]
+    .filter(group => group.items.length)
+    .map(group => [departmentKey(group), group.department]));
+  const departments = [...departmentLabels.keys()].sort((a, b) => departmentLabels.get(a)!.localeCompare(departmentLabels.get(b)!, "ar"));
 
   // تحديد الملاحظة الختامية حسب سبب المغادرة
   let footerNote = "";
@@ -63,7 +65,6 @@ export function generateClearanceReport(data: ClearanceReportData): string {
   // تجميع الأقسام تحت المستلم؛ لا نضع المجموعة كلها داخل كتلة تمنع فواصل الصفحات.
   const recipientDepartments = new Map<string, string[]>();
   for (const dept of departments) {
-    if (![...data.assets, ...data.custody].some(group => group.department === dept && group.items.length)) continue;
     const recipient = data.departmentAlternates[dept]?.trim() || "غير محدد";
     const group = recipientDepartments.get(recipient) || [];
     group.push(dept);
@@ -73,15 +74,15 @@ export function generateClearanceReport(data: ClearanceReportData): string {
   // الإبقاء على جداول الأصول والعهد القديمة داخل كل قسم.
   let departmentSectionsHTML = "";
   const appendDepartment = (dept: string) => {
-    const deptAssets = data.assets.filter(a => a.department === dept).flatMap(a => a.items);
-    const deptCustody = data.custody.filter(c => c.department === dept).flatMap(c => c.items);
+    const deptAssets = data.assets.filter(a => departmentKey(a) === dept).flatMap(a => a.items);
+    const deptCustody = data.custody.filter(c => departmentKey(c) === dept).flatMap(c => c.items);
 
     departmentSectionsHTML += `
       <div class="dept-section">
         <div class="dept-header">
           <div class="dept-title">
             <span class="dept-icon">◆</span>
-            ${escapeHtml(dept)}
+            ${escapeHtml(departmentLabels.get(dept))}
           </div>
         </div>
         <div class="dept-body">`;
@@ -873,9 +874,8 @@ export function generateClearanceReport(data: ClearanceReportData): string {
 /**
  * فتح التقرير في نافذة جديدة وطباعته
  */
-export function printClearanceReport(data: ClearanceReportData): void {
+export function printClearanceReport(data: ClearanceReportData, printWindow = window.open("", "_blank")): void {
   const html = generateClearanceReport(data);
-  const printWindow = window.open("", "_blank");
   if (printWindow) {
     printWindow.document.write(html);
     printWindow.document.close();
@@ -893,6 +893,6 @@ export function generateClearanceCode(): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
-  const timestamp = Math.floor(now.getTime() / 1000);
-  return `CLR-${year}-${month}-${timestamp}`;
+  const suffix = crypto.getRandomValues(new Uint32Array(1))[0].toString(16).padStart(8, "0");
+  return `CLR-${year}-${month}-${now.getTime()}-${suffix}`;
 }

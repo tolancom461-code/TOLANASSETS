@@ -11,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 import { useState, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import {
-  Archive as ArchiveIcon, Box, Download, Eye, FileText, FolderOpen,
+  Archive as ArchiveIcon, ArrowLeftRight, Box, Download, Eye, FileText, FolderOpen,
   HandCoins, Printer, RefreshCw, Search, ShieldAlert, Trash2, Upload, Loader2
 } from "lucide-react";
 
@@ -395,11 +395,12 @@ function ArchiveAuditTab() {
 // =============================================
 // الصفحة الرئيسية
 // =============================================
-type ArchiveTab = "assets" | "custody" | "docs_assets" | "docs_custody" | "audit";
+type ArchiveTab = "assets" | "custody" | "total_transfers" | "docs_assets" | "docs_custody" | "audit";
 
 const tabs: { key: ArchiveTab; label: string; icon: typeof Box }[] = [
   { key: "assets", label: "الأصول", icon: Box },
   { key: "custody", label: "العهد", icon: HandCoins },
+  { key: "total_transfers", label: "وثائق النقل الكلي", icon: ArrowLeftRight },
   { key: "docs_assets", label: "توثيق الأصول", icon: FileText },
   { key: "docs_custody", label: "توثيق العهد", icon: FileText },
   { key: "audit", label: "سجل الحذف", icon: ShieldAlert },
@@ -429,6 +430,7 @@ export default function Archive() {
 
       {activeTab === "assets" && <ArchiveEntityTab entityType="asset" entityLabel="الأصول" />}
       {activeTab === "custody" && <ArchiveEntityTab entityType="custody" entityLabel="العهد" />}
+      {activeTab === "total_transfers" && <ArchiveEntityTab entityType="total_transfer" entityLabel="النقل الكلي" />}
       {activeTab === "docs_assets" && <ArchiveDocsTab entityType="documentation_asset" />}
       {activeTab === "docs_custody" && <ArchiveDocsTab entityType="documentation_custody" />}
       {activeTab === "audit" && <ArchiveAuditTab />}

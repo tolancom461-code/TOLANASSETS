@@ -4,11 +4,12 @@ import { remainingQuantity } from "@shared/inventoryQuantity";
 /**
  * Design: Calm Luxury - عمليات النقل
  * مربوطة بالـ API الحقيقي عبر tRPC
- * - النقل الجزئي فقط (النقل الكلي مخفي من الواجهة)
+ * - نقل سجل واحد أو نقل كلي حسب أقسام الموظف
  * - إجراءات: استعراض وطباعة؛ الحركات المنفذة لا تعدل
  */
 import DashboardLayout from "@/components/DashboardLayout";
 import WorkflowConfirmationDialog from "@/components/WorkflowConfirmationDialog";
+import TotalTransferDialog from "@/components/TotalTransferDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -109,19 +110,18 @@ export default function Transfers() {
   const { data: transfersData, isLoading } = trpc.operations.transfers.list.useQuery();
   const { data: assetsData } = trpc.inventory.assets.list.useQuery({});
   const { data: custodyData } = trpc.inventory.custody.list.useQuery({});
-  const { data: employeesData } = trpc.settings.employees.list.useQuery();
+  const { data: employeesData, isError: employeesError } = trpc.settings.employees.list.useQuery();
   const { data: departmentsData } = trpc.settings.departments.list.useQuery();
   const { data: locationsData } = trpc.settings.locations.list.useQuery();
   const { data: branchesData } = trpc.settings.branches.list.useQuery();
 
   const utils = trpc.useUtils();
-  const createTransfer = trpc.operations.transfers.create.useMutation({
-    onSuccess: () => {
-      utils.operations.transfers.list.invalidate();
-      utils.inventory.assets.list.invalidate();
-      utils.inventory.custody.list.invalidate();
-    },
-  });
+  const refreshTransfers = () => {
+    void utils.operations.transfers.list.invalidate();
+    void utils.inventory.assets.list.invalidate();
+    void utils.inventory.custody.list.invalidate();
+  };
+  const createTransfer = trpc.operations.transfers.create.useMutation({ onSuccess: refreshTransfers });
 
   const transfers = transfersData || [];
   const allAssets = assetsData || [];
@@ -133,6 +133,7 @@ export default function Transfers() {
 
   // ─── state لعملية النقل الجديدة ─────────────────────────────────────────────
   const [showNew, setShowNew] = useState(false);
+  const [showTotal, setShowTotal] = useState(false);
   const [transferSearch, setTransferSearch] = useState("");
   const [transferItemId, setTransferItemId] = useState("");
   const [toEmployeeId, setToEmployeeId] = useState("");
@@ -281,7 +282,11 @@ export default function Transfers() {
       title="عمليات النقل"
       subtitle="نقل الأصول والعهد بين الموظفين"
       actions={
-        <div className="flex items-center gap-2 w-full justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full justify-end">
+          <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={() => setShowTotal(true)}>
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            النقل الكلي
+          </Button>
           <Button size="sm" className="h-8 text-xs gap-1.5" onClick={() => setShowNew(true)}>
             <Plus className="w-3.5 h-3.5" />
             عملية نقل جديدة
@@ -521,6 +526,14 @@ export default function Transfers() {
         </DialogContent>
       </Dialog>
 
+      {showTotal && (
+        <TotalTransferDialog
+          onClose={() => setShowTotal(false)}
+          employees={employeesData}
+          employeesError={employeesError}
+          onTransferred={refreshTransfers}
+        />
+      )}
       <WorkflowConfirmationDialog
         open={transferConfirmation}
         title="تأكيد تنفيذ النقل"

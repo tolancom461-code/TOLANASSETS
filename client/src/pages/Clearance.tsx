@@ -13,7 +13,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { printClearanceReport, generateClearanceCode } from "@/lib/clearanceReport";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
+import { CLEARANCE_REASONS, isPermanentClearance } from "@shared/clearance";
+import { openArchiveReportAsync } from "@/lib/archiveReport";
 import { toast } from "sonner";
 import {
   Search, ChevronLeft, ChevronRight, Printer, RotateCcw,
@@ -39,7 +41,31 @@ const DEFAULT_SIGNATURES = [
   "الحسابات"
 ];
 
-const REASONS = ["خروج وعودة", "إجازة داخلية", "خروج نهائي", "انتهاء عمل"];
+type ClearanceItem = {
+  id: number; name: string; code: string | null; quantity: number;
+  departmentName: string | null; groupKey?: string; departmentLabel?: string;
+};
+
+function groupClearanceItems(assets: ClearanceItem[] = [], custody: ClearanceItem[] = []) {
+  const groups = new Map<string, { key: string; label: string; assets: ClearanceItem[]; custody: ClearanceItem[] }>();
+  for (const kind of ["assets", "custody"] as const) {
+    for (const item of kind === "assets" ? assets : custody) {
+      const key = item.groupKey ?? item.departmentName ?? "عام";
+      const group = groups.get(key) ?? {
+        key, label: item.departmentLabel ?? item.departmentName ?? "عام", assets: [], custody: [],
+      };
+      group[kind].push(item);
+      groups.set(key, group);
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label, "ar"));
+}
+
+function reportInventory(groups: ReturnType<typeof groupClearanceItems>, kind: "assets" | "custody") {
+  return groups.filter(group => group[kind].length).map(({ key, label, [kind]: items }) => ({
+    department: label, groupKey: key, items: items.map(item => ({ ...item, code: item.code ?? "" })),
+  }));
+}
 
 export default function Clearance() {
   return (
@@ -82,14 +108,18 @@ function ClearanceWizard() {
   const [lastWorkDay, setLastWorkDay] = useState(() => new Date().toISOString().split("T")[0]);
   const [statements, setStatements] = useState<string[]>([...DEFAULT_STATEMENTS]);
   const [signatures, setSignatures] = useState<string[]>([...DEFAULT_SIGNATURES]);
-  const [departmentAlternates, setDepartmentAlternates] = useState<Record<string, string>>({});
+  const [departmentAlternates, setDepartmentAlternates] = useState<Partial<Record<string, number>>>({});
+  const [saved, setSaved] = useState<{ transferDocumentId: number | null } | null>(null);
+  const clearanceCode = useRef<string | null>(null);
+  const saving = useRef(false);
 
   // API data
   const { data: employeesData } = trpc.settings.employees.list.useQuery();
-  const { data: employeeItemsData } = trpc.operations.clearance.getEmployeeItems.useQuery(
+  const employeeItemsQuery = trpc.operations.clearance.getEmployeeItems.useQuery(
     { employeeId: selectedEmployeeId! },
     { enabled: !!selectedEmployeeId }
   );
+  const employeeItemsData = employeeItemsQuery.data;
   const createClearance = trpc.operations.clearance.create.useMutation();
   const utils = trpc.useUtils();
 
@@ -104,30 +134,14 @@ function ClearanceWizard() {
     { title: "التوقيعات والطباعة", icon: Printer },
   ];
 
-  // تجميع الأصول والعهد حسب القسم
-  const groupedByDept = useMemo(() => {
-    if (!employeeItemsData) return { departments: [] as string[], assetsByDept: {} as Record<string, any[]>, custodyByDept: {} as Record<string, any[]> };
-    
-    const depts = new Set<string>();
-    const assetsByDept: Record<string, any[]> = {};
-    const custodyByDept: Record<string, any[]> = {};
-
-    (employeeItemsData.assets || []).forEach((a: any) => {
-      const dept = a.departmentName || "عام";
-      depts.add(dept);
-      if (!assetsByDept[dept]) assetsByDept[dept] = [];
-      assetsByDept[dept].push(a);
-    });
-
-    (employeeItemsData.custody || []).forEach((c: any) => {
-      const dept = c.departmentName || "عام";
-      depts.add(dept);
-      if (!custodyByDept[dept]) custodyByDept[dept] = [];
-      custodyByDept[dept].push(c);
-    });
-
-    return { departments: Array.from(depts).sort(), assetsByDept, custodyByDept };
-  }, [employeeItemsData]);
+  const groups = useMemo(
+    () => groupClearanceItems(employeeItemsData?.assets, employeeItemsData?.custody),
+    [employeeItemsData],
+  );
+  const permanent = isPermanentClearance(reason);
+  const alternateNames = Object.fromEntries(groups.map(({ key }) => [
+    key, employees.find(employee => employee.id === departmentAlternates[key])?.fullName ?? "",
+  ]));
 
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
@@ -143,13 +157,20 @@ function ClearanceWizard() {
       toast.error("يرجى اختيار الموظف أولاً وفحصه");
       return false;
     }
-    if (currentStep === 1 && groupedByDept.departments.length > 0) {
-      for (const dept of groupedByDept.departments) {
-        if (!departmentAlternates[dept]) {
-          toast.error(`يرجى اختيار موظف بديل للقسم: ${dept}`);
-          return false;
-        }
+    if (currentStep === 1 || currentStep === steps.length - 1) {
+      if (employeeItemsQuery.isError || !employeeItemsData || employeeItemsQuery.isFetching) {
+        toast.error("انتظر تحميل أصول الموظف وعُهده أو أعد المحاولة.");
+        return false;
       }
+      const missing = groups.find(group => !alternateNames[group.key]);
+      if (missing) {
+        toast.error("يرجى اختيار موظف بديل لقسم " + missing.label);
+        return false;
+      }
+    }
+    if (permanent && (employeeItemsData?.incompleteCount ?? 0) > 0 && currentStep >= 2) {
+      toast.error("صحّح تخصيص الموقع أو القسم للسجلات المبيّنة قبل إصدار براءة الذمة.");
+      return false;
     }
     if (currentStep === 2) {
       if (!reason.trim()) { toast.error("يرجى اختيار سبب المغادرة"); return false; }
@@ -158,55 +179,80 @@ function ClearanceWizard() {
     return true;
   };
 
-  const handlePrintClearance = async () => {
-    if (!selectedEmployee) return;
-    const code = generateClearanceCode();
-
-    // تجهيز البيانات للتقرير
-    const assetsForReport = groupedByDept.departments.map(dept => ({
-      department: dept,
-      items: (groupedByDept.assetsByDept[dept] || []).map((a: any) => ({
-        id: a.id, name: a.name, code: a.code, quantity: a.quantity || 1
-      }))
-    })).filter(d => d.items.length > 0);
-
-    const custodyForReport = groupedByDept.departments.map(dept => ({
-      department: dept,
-      items: (groupedByDept.custodyByDept[dept] || []).map((c: any) => ({
-        id: c.id, name: c.name, code: c.code, quantity: c.quantity || 1
-      }))
-    })).filter(d => d.items.length > 0);
-
-    printClearanceReport({
-      employeeName: selectedEmployee.fullName || "",
-      fingerprintId: Number(selectedEmployee.fingerprintId) || 0,
-      idNumber: selectedEmployee.nationalId || "",
-      reason,
-      lastWorkDay,
-      dayName: getDayName(lastWorkDay),
-      statements,
-      signatures,
-      assets: assetsForReport,
-      custody: custodyForReport,
-      departmentAlternates,
-      clearanceCode: code,
-    });
-
-    // حفظ في قاعدة البيانات
+  async function showTransferDocument(documentId: number) {
     try {
-      await createClearance.mutateAsync({
+      await openArchiveReportAsync(() => utils.records.archive.getById.fetch({ id: documentId }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "تعذّر فتح وثيقة النقل.");
+    }
+  }
+
+  const handlePrintClearance = async () => {
+    if (!selectedEmployee || !employeeItemsData || saving.current || saved) return;
+    clearanceCode.current ??= generateClearanceCode();
+    const code = clearanceCode.current;
+    saving.current = true;
+    let printWindow: Window | null = null;
+    let didSave = false;
+    try {
+      printWindow = window.open("", "_blank");
+      const result = await createClearance.mutateAsync({
         clearanceCode: code,
         employeeId: selectedEmployee.id,
-        employeeName: selectedEmployee.fullName || "",
-        fingerprintId: selectedEmployee.fingerprintId || null,
+        employeeName: selectedEmployee.fullName,
+        fingerprintId: selectedEmployee.fingerprintId,
         reason,
         lastWorkDay,
-        replacementData: departmentAlternates,
+        review: {
+          snapshot: employeeItemsData.snapshot,
+          recipients: groups.map(({ key }) => ({ groupKey: key, toEmployeeId: departmentAlternates[key]! })),
+          statements,
+          signatures,
+        },
       });
-      utils.operations.clearance.list.invalidate();
-      toast.success(`تم إنشاء براءة الذمة بنجاح (${code}) وجاري فتح نافذة الطباعة...`);
-    } catch {
-      toast.error("تم الطباعة لكن حدث خطأ في حفظ البراءة في قاعدة البيانات");
+      didSave = true;
+      setSaved({ transferDocumentId: result.transferDocumentId });
+      void utils.operations.clearance.list.invalidate();
+      if (result.transferDocumentId) {
+        void utils.operations.transfers.list.invalidate();
+        void utils.operations.transfers.previewTotal.invalidate();
+        void utils.records.archive.list.invalidate();
+        void utils.records.archive.count.invalidate();
+        void utils.inventory.assets.list.invalidate();
+        void utils.inventory.custody.list.invalidate();
+      }
+
+      if (printWindow) {
+        printClearanceReport({
+          employeeName: selectedEmployee.fullName,
+          fingerprintId: Number(selectedEmployee.fingerprintId) || 0,
+          idNumber: selectedEmployee.nationalId || "",
+          reason,
+          lastWorkDay,
+          dayName: getDayName(lastWorkDay),
+          statements,
+          signatures,
+          assets: reportInventory(groups, "assets"),
+          custody: reportInventory(groups, "custody"),
+          departmentAlternates: alternateNames,
+          clearanceCode: code,
+        }, printWindow);
+      }
+      toast.success(result.transferredCount
+        ? `تم حفظ براءة الذمة ونقل ${result.transferredCount} سجل. حُفظت وثيقة النقل في الأرشيف.`
+        : `تم حفظ براءة الذمة (${code}).`, {
+        description: printWindow ? undefined : "الطباعة متاحة من إدارة براءة الذمة.",
+      });
+    } catch (error) {
+      printWindow?.close();
+      if (!didSave) {
+        toast.error(error instanceof Error ? error.message : "تعذّر حفظ براءة الذمة.");
+        void employeeItemsQuery.refetch();
+      } else {
+        toast.error("تعذّرت الطباعة. يمكنك إعادة الطباعة من إدارة براءة الذمة.");
+      }
+    } finally {
+      saving.current = false;
     }
   };
 
@@ -226,6 +272,8 @@ function ClearanceWizard() {
     setSearchQuery(emp.fullName || "");
     setShowResults(false);
     setDepartmentAlternates({});
+    setSaved(null);
+    clearanceCode.current = null;
     toast.success(`تم اختيار الموظف: ${emp.fullName}`);
   };
 
@@ -253,6 +301,7 @@ function ClearanceWizard() {
               <div key={index} className="flex items-center gap-1.5 flex-1">
                 <button
                   onClick={() => { if (isCompleted) setCurrentStep(index); }}
+                  disabled={createClearance.isPending}
                   className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all flex-1 ${
                     isActive ? "bg-primary/10 border border-primary/30 text-primary"
                     : isCompleted ? "bg-emerald-50 border border-emerald-200 text-emerald-700 cursor-pointer hover:bg-emerald-100"
@@ -364,7 +413,7 @@ function ClearanceWizard() {
           <div className="p-6 space-y-5">
             <div className="bg-primary/5 rounded-lg p-4 border border-primary/10">
               <h2 className="text-base font-bold text-foreground mb-0.5">المرحلة 2: الأصول والعهد والبدلاء</h2>
-              <p className="text-xs text-muted-foreground">مراجعة الأصول والعهد المسجلة واختيار موظف بديل لكل قسم (للتوثيق في التقرير فقط - لا يتم نقل فعلي في قاعدة البيانات)</p>
+              <p className="text-xs text-muted-foreground">راجع أصول الموظف وعُهده واختر موظفًا بديلًا لكل قسم.</p>
             </div>
 
             <div className="bg-muted/20 rounded-lg p-4 border border-border/40">
@@ -374,22 +423,27 @@ function ClearanceWizard() {
               </p>
             </div>
 
-            {groupedByDept.departments.length === 0 ? (
+            {employeeItemsQuery.isError && <p role="alert" className="text-sm text-destructive">{employeeItemsQuery.error.message}</p>}
+            {employeeItemsQuery.isFetching && <p role="status" className="text-sm text-muted-foreground">جاري تحميل أصول الموظف وعُهده…</p>}
+            {(employeeItemsData?.incompleteCount ?? 0) > 0 && (
+              <p role="status" className="rounded-lg border border-amber-300 p-3 text-sm">
+                يوجد {employeeItemsData?.incompleteCount} سجل يحتاج إلى تصحيح تخصيص الموقع أو القسم قبل النقل الكلي.
+              </p>
+            )}
+            {employeeItemsData && (groups.length === 0 ? (
               <div className="bg-emerald-50 rounded-xl p-8 text-center border border-emerald-200">
                 <CheckCircle2 className="h-10 w-10 text-emerald-600 mx-auto mb-3" />
                 <p className="text-emerald-800 font-bold">الموظف ليس عليه أي أصول أو عهد مسجلة في النظام</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {groupedByDept.departments.map(dept => {
-                  const deptAssets = groupedByDept.assetsByDept[dept] || [];
-                  const deptCustody = groupedByDept.custodyByDept[dept] || [];
+                {groups.map(({ key, label, assets: deptAssets, custody: deptCustody }) => {
                   return (
-                    <div key={dept} className="bg-card rounded-xl border border-border overflow-hidden shadow-sm">
+                    <div key={key} className="bg-card rounded-xl border border-border overflow-hidden shadow-sm">
                       <div className="bg-slate-50 px-5 py-3 border-b border-border/40">
                         <h3 className="font-bold text-sm flex items-center gap-2">
                           <Box className="h-4 w-4 text-primary" />
-                          القسم: {dept}
+                          {label}
                         </h3>
                       </div>
                       <div className="p-5 space-y-4">
@@ -456,18 +510,19 @@ function ClearanceWizard() {
                         {/* اختيار البديل */}
                         <div className="bg-blue-50/50 rounded-lg p-3.5 border border-blue-100 flex items-center gap-3 flex-wrap">
                           <Users className="h-4 w-4 text-blue-600 shrink-0" />
-                          <Label className="font-semibold text-xs text-blue-800 shrink-0">اختر موظفاً بديلاً لهذا القسم (للتوثيق فقط):</Label>
+                          <Label className="font-semibold text-xs text-blue-800 shrink-0">اختر موظفًا بديلًا لهذا القسم</Label>
                           <select
-                            value={departmentAlternates[dept] || ""}
-                            onChange={(e) => setDepartmentAlternates(prev => ({ ...prev, [dept]: e.target.value }))}
+                            aria-label={"الموظف البديل لقسم " + label}
+                            value={departmentAlternates[key] ?? ""}
+                            onChange={(e) => setDepartmentAlternates(prev => ({ ...prev, [key]: Number(e.target.value) || undefined }))}
                             className="flex-1 min-w-[200px] h-9 rounded-md border border-input bg-white px-3 py-1.5 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
                           >
                             <option value="">-- اختر الموظف البديل --</option>
                             {employees.filter(e => e.id !== selectedEmployee.id).map(emp => (
-                              <option key={emp.id} value={emp.fullName || ""}>{emp.fullName}</option>
+                              <option key={emp.id} value={emp.id}>{emp.fullName}{emp.fingerprintId ? " · " + emp.fingerprintId : ""}</option>
                             ))}
                           </select>
-                          {!departmentAlternates[dept] && (
+                          {!departmentAlternates[key] && (
                             <span className="text-[10px] text-red-500 flex items-center gap-1">
                               <AlertTriangle className="h-3 w-3" /> مطلوب
                             </span>
@@ -478,7 +533,7 @@ function ClearanceWizard() {
                   );
                 })}
               </div>
-            )}
+            ))}
           </div>
         )}
 
@@ -493,7 +548,7 @@ function ClearanceWizard() {
             <div className="bg-muted/20 rounded-xl p-5 border border-border/40">
               <Label className="text-xs font-bold mb-4 block">سبب المغادرة:</Label>
               <div className="flex flex-wrap gap-3">
-                {REASONS.map(r => (
+                {CLEARANCE_REASONS.map(r => (
                   <button key={r} onClick={() => setReason(r)}
                     className={`px-5 py-3 rounded-lg border-2 font-medium transition-all text-sm ${
                       reason === r
@@ -616,17 +671,20 @@ function ClearanceWizard() {
                     <p><strong>عدد العهد:</strong> {totalCustody}</p>
                   </div>
                 </div>
-                {groupedByDept.departments.length > 0 && (
+                {groups.length > 0 && (
                   <div className="mt-4 pt-3 border-t border-blue-100">
                     <p className="font-semibold text-blue-800 text-xs mb-2">البدلاء حسب القسم:</p>
                     <div className="space-y-1">
-                      {groupedByDept.departments.map(dept => (
-                        <p key={dept} className="text-xs">
-                          <strong>{dept}:</strong> {departmentAlternates[dept] || "غير محدد"}
+                      {groups.map(({ key, label }) => (
+                        <p key={key} className="text-xs">
+                          <strong>{label}</strong> · {alternateNames[key] || "غير محدد"}
                         </p>
                       ))}
                     </div>
                   </div>
+                )}
+                {permanent && groups.length > 0 && (
+                  <p className="mt-3 text-xs text-blue-800">عند الحفظ تُنقل الأصول والعُهد فعليًا إلى البدلاء وتُحفظ وثيقة النقل الكلي في الأرشيف.</p>
                 )}
                 <div className="mt-4 pt-3 border-t border-blue-100">
                   <p className="font-semibold text-blue-800 text-xs mb-2">الموقعون:</p>
@@ -653,17 +711,22 @@ function ClearanceWizard() {
       <div className="flex items-center justify-between">
         <div>
           {currentStep > 0 && (
-            <Button variant="outline" onClick={prevStep} className="gap-2 text-xs h-9">
+            <Button variant="outline" onClick={prevStep} disabled={createClearance.isPending} className="gap-2 text-xs h-9">
               <ChevronRight className="h-3.5 w-3.5" />
               السابق
             </Button>
           )}
         </div>
         <div className="flex gap-2">
+          {currentStep === steps.length - 1 && saved?.transferDocumentId && (
+            <Button variant="outline" className="gap-2 text-xs h-9" onClick={() => void showTransferDocument(saved.transferDocumentId!)}>
+              <FileText className="h-3.5 w-3.5" /> عرض وثيقة النقل
+            </Button>
+          )}
           {currentStep === steps.length - 1 ? (
-            <Button onClick={nextStep} disabled={createClearance.isPending} className="gap-2 text-xs h-9 bg-emerald-600 hover:bg-emerald-700">
+            <Button onClick={nextStep} disabled={createClearance.isPending || !!saved} className="gap-2 text-xs h-9 bg-emerald-600 hover:bg-emerald-700">
               {createClearance.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
-              طباعة وحفظ براءة الذمة
+              {saved ? "تم حفظ براءة الذمة" : "حفظ وطباعة براءة الذمة"}
             </Button>
           ) : (
             <Button onClick={nextStep} className="gap-2 text-xs h-9">
@@ -739,40 +802,7 @@ function ClearanceManagement() {
       const lastWorkDay = rec.lastWorkDay
         ? new Date(rec.lastWorkDay).toISOString().split("T")[0]
         : new Date().toISOString().split("T")[0];
-      const replacementData = (rec.replacementData as Record<string, string>) || {};
-
-      // تجميع الأصول حسب القسم
-      const deptSet = new Set<string>();
-      const assetsByDept: Record<string, any[]> = {};
-      const custodyByDept: Record<string, any[]> = {};
-
-      empAssets.forEach((a: any) => {
-        const dept = a.departmentName || "عام";
-        deptSet.add(dept);
-        if (!assetsByDept[dept]) assetsByDept[dept] = [];
-        assetsByDept[dept].push(a);
-      });
-      empCustody.forEach((c: any) => {
-        const dept = c.departmentName || "عام";
-        deptSet.add(dept);
-        if (!custodyByDept[dept]) custodyByDept[dept] = [];
-        custodyByDept[dept].push(c);
-      });
-
-      const departments = Array.from(deptSet).sort();
-      const assetsForReport = departments.map(dept => ({
-        department: dept,
-        items: (assetsByDept[dept] || []).map((a: any) => ({
-          id: a.id, name: a.name || a.assetName || "", code: a.code || a.assetCode || "", quantity: a.quantity || 1
-        }))
-      })).filter(d => d.items.length > 0);
-
-      const custodyForReport = departments.map(dept => ({
-        department: dept,
-        items: (custodyByDept[dept] || []).map((c: any) => ({
-          id: c.id, name: c.name || "", code: c.code || "", quantity: c.quantity || 1
-        }))
-      })).filter(d => d.items.length > 0);
+      const reportGroups = groupClearanceItems(empAssets, empCustody);
 
       printClearanceReport({
         employeeName: rec.employeeName || "",
@@ -781,18 +811,11 @@ function ClearanceManagement() {
         reason: rec.reason || "",
         lastWorkDay,
         dayName: getDayName(lastWorkDay),
-        statements: [
-          "المذكور ليس عليه أي متعلقات حتى آخر يوم عمل له يوم {day} الموافق {date} حيث أنه:",
-          "غير مدين بحسابات ذمم العاملين وحسابات عهد المصروفات.",
-          "وليس عليه أي التزامات تجاه الموردين أو الأطراف ذات العلاقة بالشركة.",
-          "وليس عليه أي عهد شخصية أو عهد عامة. (تم التحقق آليًا بواسطة مسؤول العهد)",
-          "وليس عليه أي التزامات إدارية تجاه الشركة (هاتف – سيارة – سكن – أخرى).",
-          "وليس عليه أي إلتزامات أخرى."
-        ],
-        signatures: ["مسؤول العهد", "المسؤول المباشر", "م. قسم IT", "م. الشؤون الإدارية", "الحسابات"],
-        assets: assetsForReport,
-        custody: custodyForReport,
-        departmentAlternates: replacementData,
+        statements: selectedClearanceData.statements ?? DEFAULT_STATEMENTS,
+        signatures: selectedClearanceData.signatures ?? DEFAULT_SIGNATURES,
+        assets: reportInventory(reportGroups, "assets"),
+        custody: reportInventory(reportGroups, "custody"),
+        departmentAlternates: selectedClearanceData.departmentAlternates,
         clearanceCode: rec.clearanceCode,
       });
       toast.success("جاري فتح نافذة الطباعة...");
@@ -1001,7 +1024,18 @@ function ClearanceManagement() {
                 )}
               </div>
 
-              <div className="flex gap-2 pt-2">
+              <div className="flex flex-wrap gap-2 pt-2">
+                {selectedClearanceData.transferDocumentId && (
+                  <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={async () => {
+                    try {
+                      await openArchiveReportAsync(() => utils.records.archive.getById.fetch({ id: selectedClearanceData.transferDocumentId! }));
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "تعذّر فتح وثيقة النقل.");
+                    }
+                  }}>
+                    <FileText className="h-3.5 w-3.5" /> عرض وثيقة النقل
+                  </Button>
+                )}
                 <Button size="sm" className="gap-1.5 text-xs" disabled={isPrinting}
                   onClick={() => {
                     const rec = records.find((r: any) => r.id === selectedId);

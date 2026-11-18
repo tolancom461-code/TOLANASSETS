@@ -1,4 +1,5 @@
 import { remainingQuantity } from "../../shared/inventoryQuantity";
+import { departmentTransferProcedures, employeeInventory, isTransferable, readTotalTransferScope, recordTransfer } from "../transferWorkflow";
 /**
  * Operations Router - النقل والاستبعاد وبراءة الذمة
  */
@@ -23,6 +24,8 @@ import {
   auditLog,
 } from "../../drizzle/schema";
 import { logAuditAction } from "../security";
+import { isPermanentClearance } from "../../shared/clearance";
+import { clearanceInventory, clearanceReviewInput, readClearanceSnapshot, saveReviewedClearance } from "../clearanceWorkflow";
 import { TRPCError } from "@trpc/server";
 import { isStoredImageUrl } from "../../shared/imageUrls";
 import { historyAudit } from "../history";
@@ -89,6 +92,7 @@ const transferInput = z.object({
 });
 
 const transfersRouter = router({
+  ...departmentTransferProcedures,
   list: operatorProcedure.query(async () => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -133,8 +137,7 @@ const transfersRouter = router({
       if (input.movementType === "total") {
         const [sourceEmployee] = await tx.select().from(employees).where(eq(employees.id, input.fromEmployeeId!)).limit(1);
         if (!sourceEmployee) throw new TRPCError({ code: "BAD_REQUEST", message: "الموظف المصدر غير موجود" });
-        selected = await tx.select().from(table).where(and(eq(table.assignedTo, input.fromEmployeeId!), eq(table.status, "ACTIVE"), sql`${table.quantity} - COALESCE(${table.excludedQuantity}, 0) - ${table.warrantyReplacedQuantity} > 0`))
-          .orderBy(asc(table.id)).for("update");
+        selected = await employeeInventory(tx, input.entityType, input.fromEmployeeId!, true);
       } else {
         selected = await tx.select().from(table).where(eq(table.id, input.entityId!)).limit(1).for("update");
         if (!selected.length) throw new TRPCError({ code: "NOT_FOUND", message: "الأصل أو العهدة غير موجودة" });
@@ -151,39 +154,20 @@ const transfersRouter = router({
       let quantityMoved = 0;
       for (const entity of affected) {
         await protectFinancialHistory(tx,input.entityType,entity.id,new Date().toISOString().slice(0,10));
-        const excluded = entity.excludedQuantity || 0;
-        const remaining = remainingQuantity(entity);
-        if (entity.status !== "ACTIVE" || !Number.isInteger(remaining) || remaining <= 0 || excluded < 0) {
+        if (!isTransferable(entity)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن نقل سجل مستبعد أو غير نشط أو بدون كمية متبقية" });
         }
         const [sourceEmployee] = entity.assignedTo ? await tx.select().from(employees).where(eq(employees.id, entity.assignedTo)).limit(1) : [];
         const [sourceDepartment] = entity.departmentId ? await tx.select().from(departments).where(eq(departments.id, entity.departmentId)).limit(1) : [];
         const [sourceLocation] = entity.locationId ? await tx.select().from(locations).where(eq(locations.id, entity.locationId)).limit(1) : [];
-        const snapshot = {
-          entityName: input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetName : (entity as typeof custodyItems.$inferSelect).name,
-          entityCode: input.entityType === "asset" ? (entity as typeof assets.$inferSelect).assetCode : (entity as typeof custodyItems.$inferSelect).code,
-          fromEmployeeName: sourceEmployee?.fullName || "غير محدد", toEmployeeName: targetEmployee.fullName,
-        };
-        const record = {
-          entityType: input.entityType, entityId: entity.id, movementType: input.movementType,
-          fromEmployeeId: entity.assignedTo, toEmployeeId: destination.employeeId,
-          fromDepartment: sourceDepartment?.name || null, toDepartment: destination.departmentName,
-          fromLocation: sourceLocation?.name || null, toLocation: destination.locationName,
-          quantity: remaining, assetValue: entity.assetValue, notes: input.notes || null, transferredBy: ctx.user.id,
-        };
-        const inserted = await tx.insert(assetTransfers).values(record);
-        const id = Number(inserted[0].insertId);
-        await tx.update(table).set({ assignedTo: destination.employeeId, departmentId: destination.departmentId, locationId: destination.locationId }).where(eq(table.id, entity.id));
-        await historyAudit(tx, ctx, { entityType: input.entityType, entityId: entity.id, transferId: id, tableName: "asset_transfers", recordId: id, actionType: "TRANSFER",
-          actionDescription: "نقل " + (input.entityType === "asset" ? "أصل" : "عهدة") + " #" + entity.id,
-          oldData: entity, newData: { ...record, destination, affectedEntityIds, transferSnapshot: snapshot },
-          changedFields: [
-            ...(entity.assignedTo !== destination.employeeId ? ["assignedTo"] : []),
-            ...(entity.departmentId !== destination.departmentId ? ["departmentId"] : []),
-            ...(entity.locationId !== destination.locationId ? ["locationId"] : []),
-          ],
+        const result = await recordTransfer(tx, ctx, {
+          kind: input.entityType, entity, movementType: input.movementType, destination, affectedEntityIds,
+          sourceEmployeeName: sourceEmployee?.fullName || "غير محدد", targetEmployeeName: targetEmployee.fullName,
+          sourceDepartmentName: sourceDepartment?.name || null, sourceLocationName: sourceLocation?.name || null,
+          notes: input.notes,
         });
-        transferIds.push(id); quantityMoved += remaining;
+        transferIds.push(result.id);
+        quantityMoved += result.quantity;
       }
       return { success: true, id: transferIds[0], transferIds, affectedEntityIds, count: transferIds.length, quantityMoved };
     });
@@ -357,18 +341,27 @@ const clearanceRouter = router({
 
   create: operatorProcedure
     .input(z.object({
-      clearanceCode: z.string(),
-      employeeId: z.number(),
+      clearanceCode: z.string().trim().min(1).max(50),
+      employeeId: z.number().int().positive(),
       employeeName: z.string(),
       fingerprintId: z.string().optional().nullable(),
       reason: z.string().optional().nullable(),
       lastWorkDay: z.string().optional().nullable(),
       htmlFilePath: z.string().optional().nullable(),
       replacementData: z.any().optional(),
+      review: clearanceReviewInput.optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      if (input.review) {
+        const review = input.review;
+        return db.transaction(tx => saveReviewedClearance(tx, ctx, { ...input, review }));
+      }
+      if (isPermanentClearance(input.reason)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "راجع الأصول والعُهد وحدد البدلاء قبل إصدار براءة الذمة." });
+      }
 
       const result = await db.insert(clearanceRecords).values({
         clearanceCode: input.clearanceCode,
@@ -395,7 +388,7 @@ const clearanceRouter = router({
         userAgent: ctx.req.headers["user-agent"] || undefined,
       });
 
-      return { success: true, id: Number(result[0].insertId) };
+      return { success: true, id: Number(result[0].insertId), transferDocumentId: null, transferredCount: 0 };
     }),
 
   // الحصول على بيانات براءة ذمة واحدة مع عهد وأصول الموظف
@@ -415,7 +408,16 @@ const clearanceRouter = router({
         .where(eq(employees.id, record.employeeId))
         .limit(1);
 
-      // جلب عهد وأصول الموظف في وقت إصدار البراءة
+      const saved = readClearanceSnapshot(record.replacementData);
+      if (saved) {
+        return {
+          record, assets: saved.assets, custody: saved.custody, nationalId: employeeData?.nationalId ?? null,
+          departmentAlternates: saved.departmentAlternates, statements: saved.statements, signatures: saved.signatures,
+          transferDocumentId: saved.transferDocumentId,
+        };
+      }
+
+      // السجلات القديمة تعرض البيانات المتاحة من تخصيص الموظف الحالي.
       const employeeAssets = await db
         .select({
           id: assets.id,
@@ -445,49 +447,17 @@ const clearanceRouter = router({
         assets: employeeAssets, 
         custody: employeeCustody,
         nationalId: employeeData?.nationalId || null,
+        departmentAlternates: (record.replacementData ?? {}) as Record<string, string>,
+        statements: null, signatures: null, transferDocumentId: null,
       };
     }),
 
-  // الحصول على عناصر موظف (أصول + عهد)
   getEmployeeItems: operatorProcedure
-    .input(z.object({ employeeId: z.number() }))
+    .input(z.object({ employeeId: z.number().int().positive() }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      const employeeAssets = await db
-        .select({
-          id: assets.id,
-          name: assets.assetName,
-          code: assets.assetCode,
-          quantity: sql<number>`${assets.quantity} - COALESCE(${assets.excludedQuantity}, 0) - ${assets.warrantyReplacedQuantity}`,
-          value: assets.assetValue,
-          type: sql<string>`'asset'`,
-          departmentName: departments.name,
-          locationName: locations.name,
-        })
-        .from(assets)
-        .leftJoin(departments, eq(assets.departmentId, departments.id))
-        .leftJoin(locations, eq(assets.locationId, locations.id))
-        .where(and(eq(assets.assignedTo, input.employeeId), eq(assets.status, "ACTIVE")));
-
-      const employeeCustody = await db
-        .select({
-          id: custodyItems.id,
-          name: custodyItems.name,
-          code: custodyItems.code,
-          quantity: sql<number>`${custodyItems.quantity} - COALESCE(${custodyItems.excludedQuantity}, 0) - ${custodyItems.warrantyReplacedQuantity}`,
-          value: custodyItems.assetValue,
-          type: sql<string>`'custody'`,
-          departmentName: departments.name,
-          locationName: locations.name,
-        })
-        .from(custodyItems)
-        .leftJoin(departments, eq(custodyItems.departmentId, departments.id))
-        .leftJoin(locations, eq(custodyItems.locationId, locations.id))
-        .where(and(eq(custodyItems.assignedTo, input.employeeId), eq(custodyItems.status, "ACTIVE")));
-
-      return { assets: employeeAssets, custody: employeeCustody };
+      return clearanceInventory(await readTotalTransferScope(db, input.employeeId));
     }),
 
   // حذف براءة ذمة
